@@ -1,0 +1,126 @@
+import { lazy, Suspense } from 'react'
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Link,
+  Navigate,
+  useLocation,
+} from 'react-router-dom'
+import { AuthProvider, useAuth } from './lib/AuthContext'
+import { useLastUpdate, formatWhen, relativeTime } from './lib/useLastUpdate'
+import { supabase } from './lib/supabase'
+import SearchPage from './pages/SearchPage'
+import LoginPage from './pages/LoginPage'
+
+// The admin page pulls in SheetJS (~400 kB). Everyone uses search; almost
+// nobody uses upload, so load it only when someone actually opens /admin.
+const AdminPage = lazy(() => import('./pages/AdminPage'))
+
+const nf = new Intl.NumberFormat()
+
+function RequireAuth({ children }) {
+  const { session, loading } = useAuth()
+  if (loading) return <p className="muted">Checking sign in...</p>
+  if (!session) return <LoginPage />
+  return children
+}
+
+function LastUpdate() {
+  const { info, loading } = useLastUpdate('inventory')
+
+  if (loading) return <div className="lastupdate" />
+  if (!info) {
+    return (
+      <div className="lastupdate">
+        <span className="muted small">No data loaded yet</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="lastupdate" title={`${nf.format(info.row_count)} rows loaded by ${info.uploaded_email ?? 'unknown'}`}>
+      <span className="muted small">Last update</span>
+      <strong className="small">{formatWhen(info.uploaded_at)}</strong>
+      <span className="muted small">
+        {relativeTime(info.uploaded_at)} &middot; {nf.format(info.row_count)} rows
+      </span>
+    </div>
+  )
+}
+
+function TopBar() {
+  const { session } = useAuth()
+  const location = useLocation()
+  const onAdmin = location.pathname.startsWith('/admin')
+
+  return (
+    <header className="topbar">
+      <div className="brand">
+        <h1>
+          <Link to="/">Query Search</Link>
+        </h1>
+        <p className="sub">Search warehouse stock by part number.</p>
+      </div>
+
+      <div className="topactions">
+        <LastUpdate />
+
+        {onAdmin ? (
+          <Link className="btn ghost" to="/">
+            &larr; Back to search
+          </Link>
+        ) : (
+          <Link className="btn" to="/admin">
+            Update query
+          </Link>
+        )}
+
+        {session && (
+          <button
+            type="button"
+            className="ghost small"
+            onClick={() => supabase.auth.signOut()}
+            title={session.user.email}
+          >
+            Sign out
+          </button>
+        )}
+      </div>
+    </header>
+  )
+}
+
+function Layout({ children }) {
+  return (
+    <div className="app">
+      <TopBar />
+      {children}
+    </div>
+  )
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <BrowserRouter>
+        <Layout>
+          <Routes>
+            <Route path="/" element={<SearchPage />} />
+            <Route
+              path="/admin"
+              element={
+                <RequireAuth>
+                  <Suspense fallback={<p className="muted">Loading uploader...</p>}>
+                    <AdminPage />
+                  </Suspense>
+                </RequireAuth>
+              }
+            />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Layout>
+      </BrowserRouter>
+    </AuthProvider>
+  )
+}
