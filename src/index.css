@@ -503,8 +503,20 @@ input[type='file'] {
   margin-bottom: 6px;
 }
 
+.step {
+  display: inline-block;
+  padding: 1px 8px;
+  margin-right: 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
 .bar {
-  height: 8px;
+  height: 10px;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 999px;
@@ -514,7 +526,30 @@ input[type='file'] {
 .fill {
   height: 100%;
   background: var(--accent);
-  transition: width 0.15s ease;
+  transition: width 0.2s ease;
+}
+
+/* Used before a total is known, so the bar still shows the app is alive. */
+.fill.indeterminate {
+  width: 35%;
+  animation: slide 1.1s ease-in-out infinite;
+}
+
+@keyframes slide {
+  0% { margin-left: -35%; }
+  100% { margin-left: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fill.indeterminate {
+    animation: none;
+    width: 100%;
+    opacity: 0.4;
+  }
+}
+
+.progressnote {
+  margin: 6px 0 0;
 }
 
 .progress button {

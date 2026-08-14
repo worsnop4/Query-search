@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { parseInventoryFiles, parseMasterDataFiles } from '../lib/parse'
 import { replaceTable, INVENTORY_TARGET, MASTER_TARGET } from '../lib/upload'
 import {
@@ -11,12 +11,22 @@ import {
 const nf = new Intl.NumberFormat()
 
 const PHASE_LABEL = {
-  reading: 'Reading file...',
-  parsing: 'Parsing rows...',
-  clearing: 'Preparing...',
-  uploading: 'Uploading...',
-  swapping: 'Verifying and swapping...',
+  reading: 'Reading files...',
+  parsing: 'Reading files...',
+  clearing: 'Preparing database...',
+  uploading: 'Uploading to database...',
+  swapping: 'Verifying and switching over...',
   done: 'Done',
+}
+
+// Which step of the whole operation each phase belongs to, for "Step 2 of 3".
+const PHASE_STEP = { reading: 1, parsing: 1, clearing: 2, uploading: 2, swapping: 3, done: 3 }
+
+function formatDuration(secs) {
+  if (secs < 60) return `${secs}s`
+  const m = Math.floor(secs / 60)
+  const s = secs % 60
+  return `${m}m ${String(s).padStart(2, '0')}s`
 }
 
 const UPLOADS = [
@@ -73,8 +83,32 @@ function UploadCard({ config }) {
   const [error, setError] = useState(null)
   const [result, setResult] = useState(null)
 
+  const [elapsed, setElapsed] = useState(0)
+
   const cancelRef = useRef(false)
   const inputRef = useRef(null)
+
+  // A running clock, so a long upload visibly moves even while a single
+  // chunk is in flight.
+  useEffect(() => {
+    if (!busy) return
+    const started = Date.now()
+    setElapsed(0)
+    const id = setInterval(() => setElapsed(Math.round((Date.now() - started) / 1000)), 1000)
+    return () => clearInterval(id)
+  }, [busy])
+
+  // Closing the tab mid-upload is safe for the data, but the admin loses all
+  // their progress and has to start again. Warn them.
+  useEffect(() => {
+    if (!busy) return
+    const warn = (e) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [busy])
 
   function reset() {
     setFiles([])
@@ -87,11 +121,25 @@ function UploadCard({ config }) {
   }
 
   async function onPick(e) {
-    const picked = e.target.files
+    // Snapshot into a real array BEFORE reset(). e.target.files is a *live*
+    // FileList bound to the input, so reset() clearing input.value empties it
+    // too - which silently left us with zero files and nothing happening.
+    const picked = Array.from(e.target.files ?? [])
     reset()
-    if (!picked || picked.length === 0) return
-    setFiles([...picked])
+    if (picked.length === 0) return
+
+    setFiles(picked)
     setBusy(true)
+    // Show something immediately: reading the first file can take seconds
+    // before the parser reports any progress of its own.
+    setProgress({
+      phase: 'reading',
+      done: 0,
+      total: picked.length,
+      fileCount: picked.length,
+      fileIndex: 1,
+      fileName: picked[0]?.name,
+    })
 
     try {
       const out = await config.parse(picked, setProgress)
@@ -111,6 +159,7 @@ function UploadCard({ config }) {
     setResult(null)
     cancelRef.current = false
 
+    const startedAt = Date.now()
     try {
       const moved = await replaceTable({
         ...config.target,
@@ -118,9 +167,13 @@ function UploadCard({ config }) {
         onProgress: setProgress,
         shouldCancel: () => cancelRef.current,
       })
-      setResult(moved)
+      setResult({
+        rows: moved,
+        files: parsed.fileCount ?? 1,
+        seconds: Math.round((Date.now() - startedAt) / 1000),
+      })
       setParsed(null)
-      setFile(null)
+      setFiles([])
       if (inputRef.current) inputRef.current.value = ''
       notifyDataUpdated() // refresh the "Last update" in the header
     } catch (err) {
@@ -165,26 +218,54 @@ function UploadCard({ config }) {
         <div className="progress">
           <div className="progresshead">
             <span>
-              {progress.fileCount > 1 && progress.phase === 'parsing'
-                ? `Reading file ${nf.format(progress.fileIndex ?? progress.done)} of ${nf.format(progress.fileCount)}`
-                : (PHASE_LABEL[progress.phase] ?? progress.phase)}
-            </span>
-            {progress.total > 0 && (
-              <span className="mono">
-                {nf.format(progress.done)} / {nf.format(progress.total)}
-                {pct !== null && ` (${pct}%)`}
+              <span className="step">
+                Step {PHASE_STEP[progress.phase] ?? 1} of 3
               </span>
-            )}
+              {PHASE_LABEL[progress.phase] ?? progress.phase}
+            </span>
+            <span className="mono">
+              {progress.total > 0 && (
+                <>
+                  {nf.format(progress.done)} / {nf.format(progress.total)}
+                  {pct !== null && ` (${pct}%)`}
+                </>
+              )}
+              {elapsed > 0 && (
+                <span className="muted"> &nbsp;{formatDuration(elapsed)}</span>
+              )}
+            </span>
           </div>
-          {progress.rowsSoFar > 0 && (
-            <p className="muted small">
-              {nf.format(progress.rowsSoFar)} rows so far
-              {progress.fileName && ` · ${progress.fileName}`}
-            </p>
-          )}
+
           <div className="bar">
-            <div className="fill" style={{ width: `${pct ?? 0}%` }} />
+            <div
+              className={`fill${pct === null ? ' indeterminate' : ''}`}
+              style={pct === null ? undefined : { width: `${pct}%` }}
+            />
           </div>
+
+          <p className="muted small progressnote">
+            {progress.fileCount > 1 && PHASE_STEP[progress.phase] === 1 ? (
+              <>
+                File {nf.format(progress.fileIndex ?? progress.done + 1)} of{' '}
+                {nf.format(progress.fileCount)}
+                {progress.rowsSoFar > 0 &&
+                  ` · ${nf.format(progress.rowsSoFar)} rows so far`}
+                {progress.fileName && (
+                  <>
+                    {' '}
+                    · <span className="mono">{progress.fileName}</span>
+                  </>
+                )}
+              </>
+            ) : progress.phase === 'uploading' ? (
+              'Sending rows in batches of 2,000. Keep this tab open.'
+            ) : progress.phase === 'swapping' ? (
+              'Checking the row count, then switching the live data over in one step.'
+            ) : (
+              'Working...'
+            )}
+          </p>
+
           {progress.phase === 'uploading' && (
             <button
               type="button"
@@ -193,18 +274,24 @@ function UploadCard({ config }) {
                 cancelRef.current = true
               }}
             >
-              Cancel
+              Cancel upload
             </button>
           )}
         </div>
       )}
 
-      {error && <div className="error">{error}</div>}
+      {error && (
+        <div className="error">
+          <strong>Upload failed.</strong> {error}
+        </div>
+      )}
 
       {result !== null && (
         <div className="success">
-          Replaced successfully &mdash; <strong>{nf.format(result)}</strong> rows are
-          now live.
+          <strong>Update complete.</strong>{' '}
+          {nf.format(result.rows)} rows are now live
+          {result.files > 1 && ` from ${nf.format(result.files)} files`}, replaced in{' '}
+          {formatDuration(result.seconds)}.
         </div>
       )}
 
