@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { parseInventory, parseMasterData } from '../lib/parse'
+import { parseInventoryFiles, parseMasterDataFiles } from '../lib/parse'
 import { replaceTable, INVENTORY_TARGET, MASTER_TARGET } from '../lib/upload'
 import {
   notifyDataUpdated,
@@ -26,9 +26,10 @@ const UPLOADS = [
     title: 'Query',
     replaceLabel: 'Query data',
     subtitle: 'The daily stock export from the WMS',
-    accept: '.xlsm,.xlsx,.xls',
-    hint: 'Upload the file exactly as it comes out of the WMS. No need to clean it up or paste it into a template.',
-    parse: parseInventory,
+    accept: '.xls,.xlsm,.xlsx',
+    multiple: true,
+    hint: 'Select ALL the raw files the WMS gave you at once - the whole folder, around 39 files. No merging, no macro, no template. A single merged file works too.',
+    parse: parseInventoryFiles,
     target: INVENTORY_TARGET,
     affects: 'Replaces all query rows. Master data is not touched.',
   },
@@ -39,8 +40,9 @@ const UPLOADS = [
     replaceLabel: 'Master Data',
     subtitle: 'Part names, car type and DLOC',
     accept: '.xlsb,.xlsx,.xls',
+    multiple: true,
     hint: 'Upload the PFEP Simple Master Data file. Only Part Number, Part Name, Car Type and NEW DLOC are imported.',
-    parse: parseMasterData,
+    parse: parseMasterDataFiles,
     target: MASTER_TARGET,
     affects: 'Replaces all master data. Query data is not touched.',
   },
@@ -64,7 +66,7 @@ function CardLastUpdate({ table }) {
 }
 
 function UploadCard({ config }) {
-  const [file, setFile] = useState(null)
+  const [files, setFiles] = useState([])
   const [parsed, setParsed] = useState(null)
   const [progress, setProgress] = useState(null)
   const [busy, setBusy] = useState(false)
@@ -75,7 +77,7 @@ function UploadCard({ config }) {
   const inputRef = useRef(null)
 
   function reset() {
-    setFile(null)
+    setFiles([])
     setParsed(null)
     setProgress(null)
     setError(null)
@@ -85,14 +87,14 @@ function UploadCard({ config }) {
   }
 
   async function onPick(e) {
-    const f = e.target.files?.[0]
+    const picked = e.target.files
     reset()
-    if (!f) return
-    setFile(f)
+    if (!picked || picked.length === 0) return
+    setFiles([...picked])
     setBusy(true)
 
     try {
-      const out = await config.parse(f, setProgress)
+      const out = await config.parse(picked, setProgress)
       setParsed(out)
     } catch (err) {
       setError(err.message ?? String(err))
@@ -150,14 +152,23 @@ function UploadCard({ config }) {
         ref={inputRef}
         type="file"
         accept={config.accept}
+        multiple={config.multiple}
         onChange={onPick}
         disabled={busy}
       />
 
+      {files.length > 1 && !parsed && !error && (
+        <p className="muted small">{nf.format(files.length)} files selected</p>
+      )}
+
       {progress && (
         <div className="progress">
           <div className="progresshead">
-            <span>{PHASE_LABEL[progress.phase] ?? progress.phase}</span>
+            <span>
+              {progress.fileCount > 1 && progress.phase === 'parsing'
+                ? `Reading file ${nf.format(progress.fileIndex ?? progress.done)} of ${nf.format(progress.fileCount)}`
+                : (PHASE_LABEL[progress.phase] ?? progress.phase)}
+            </span>
             {progress.total > 0 && (
               <span className="mono">
                 {nf.format(progress.done)} / {nf.format(progress.total)}
@@ -165,6 +176,12 @@ function UploadCard({ config }) {
               </span>
             )}
           </div>
+          {progress.rowsSoFar > 0 && (
+            <p className="muted small">
+              {nf.format(progress.rowsSoFar)} rows so far
+              {progress.fileName && ` · ${progress.fileName}`}
+            </p>
+          )}
           <div className="bar">
             <div className="fill" style={{ width: `${pct ?? 0}%` }} />
           </div>
@@ -194,11 +211,20 @@ function UploadCard({ config }) {
       {parsed && !busy && (
         <div className="preview">
           <div className="previewgrid">
-            <span>File</span>
-            <strong className="mono">{file?.name}</strong>
+            {parsed.fileCount > 1 ? (
+              <>
+                <span>Files</span>
+                <strong>{nf.format(parsed.fileCount)} files combined</strong>
+              </>
+            ) : (
+              <>
+                <span>File</span>
+                <strong className="mono">{files[0]?.name}</strong>
 
-            <span>Sheet</span>
-            <strong className="mono">{parsed.sheetName}</strong>
+                <span>Sheet</span>
+                <strong className="mono">{parsed.sheetName}</strong>
+              </>
+            )}
 
             <span>Header row</span>
             <strong>{parsed.headerRow}</strong>
@@ -220,6 +246,36 @@ function UploadCard({ config }) {
               </>
             )}
           </div>
+
+          {parsed.fileCount > 1 && (
+            <details className="filelist">
+              <summary>
+                Rows per file ({nf.format(parsed.perFile.length)} files)
+              </summary>
+              <div className="tablewrap tight">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>File</th>
+                      <th className="num">Rows</th>
+                      <th className="num">Header row</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parsed.perFile.map((f) => (
+                      <tr key={f.name}>
+                        <td className="mono ellipsis" title={f.name}>
+                          {f.name}
+                        </td>
+                        <td className="num">{nf.format(f.rows)}</td>
+                        <td className="num">{f.headerRow}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
 
           {parsed.missingOptional?.length > 0 && (
             <div className="warn">

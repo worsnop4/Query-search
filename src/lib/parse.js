@@ -284,3 +284,162 @@ export async function parseMasterData(file, onProgress) {
   onProgress?.({ phase: 'parsing', done: rows.length, total })
   return { rows, sheetName, headerRow: headerRow + 1, missingOptional, duplicates, skipped }
 }
+
+// ---------------------------------------------------------------------------
+// Multi-file entry points
+//
+// The WMS does not export one file. It pages the result, so a single day
+// arrives as ~39 separate .xls files of about 5,000 rows each, with machine
+// generated names and a different sheet name in every file. Merging them by
+// hand (or by macro) before uploading is an unnecessary step: parse them all
+// and concatenate.
+//
+// Every file is validated independently, so one bad file names itself in the
+// error rather than failing anonymously. Nothing reaches the database until
+// all of them have parsed - and even then only via the staging table.
+// ---------------------------------------------------------------------------
+
+function toList(files) {
+  // Accepts a FileList, an array, or a single File. Avoid referencing the
+  // FileList global directly so this also runs under Node in the tests.
+  let list
+  if (!files) list = []
+  else if (Array.isArray(files)) list = [...files]
+  else if (typeof files.length === 'number') list = Array.from(files)
+  else list = [files]
+
+  if (list.length === 0) throw new Error('No files selected.')
+  // Machine-generated names sort meaninglessly, but order does not matter:
+  // the whole table is replaced. Sorting only makes the summary readable.
+  return list.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+export async function parseInventoryFiles(files, onProgress) {
+  const list = toList(files)
+  const rows = []
+  const perFile = []
+  const missingOptional = new Set()
+  let skipped = 0
+
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i]
+    onProgress?.({
+      phase: 'parsing',
+      done: i,
+      total: list.length,
+      fileName: f.name,
+      fileIndex: i + 1,
+      fileCount: list.length,
+      rowsSoFar: rows.length,
+    })
+
+    let res
+    try {
+      res = await parseInventory(f)
+    } catch (err) {
+      throw new Error(`${f.name}: ${err.message}`)
+    }
+
+    perFile.push({
+      name: f.name,
+      rows: res.rows.length,
+      sheetName: res.sheetName,
+      headerRow: res.headerRow,
+    })
+    for (const m of res.missingOptional) missingOptional.add(m)
+    skipped += res.skipped
+    for (const r of res.rows) rows.push(r)
+
+    await yieldToBrowser()
+  }
+
+  onProgress?.({
+    phase: 'parsing',
+    done: list.length,
+    total: list.length,
+    fileCount: list.length,
+    rowsSoFar: rows.length,
+  })
+
+  return {
+    rows,
+    perFile,
+    fileCount: list.length,
+    sheetName: list.length === 1 ? perFile[0].sheetName : `${list.length} files`,
+    headerRow: perFile[0]?.headerRow,
+    missingOptional: [...missingOptional],
+    skipped,
+  }
+}
+
+export async function parseMasterDataFiles(files, onProgress) {
+  const list = toList(files)
+  const byPart = new Map()
+  const perFile = []
+  const missingOptional = new Set()
+  let duplicates = 0
+  let skipped = 0
+
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i]
+    onProgress?.({
+      phase: 'parsing',
+      done: i,
+      total: list.length,
+      fileName: f.name,
+      fileIndex: i + 1,
+      fileCount: list.length,
+      rowsSoFar: byPart.size,
+    })
+
+    let res
+    try {
+      res = await parseMasterData(f)
+    } catch (err) {
+      throw new Error(`${f.name}: ${err.message}`)
+    }
+
+    perFile.push({
+      name: f.name,
+      rows: res.rows.length,
+      sheetName: res.sheetName,
+      headerRow: res.headerRow,
+    })
+    for (const m of res.missingOptional) missingOptional.add(m)
+    skipped += res.skipped
+    duplicates += res.duplicates
+
+    // De-duplicate ACROSS files as well as within them.
+    for (const rec of res.rows) {
+      const existing = byPart.get(rec.part_number)
+      if (existing) {
+        duplicates++
+        if (!existing.part_name && rec.part_name) byPart.set(rec.part_number, rec)
+      } else {
+        byPart.set(rec.part_number, rec)
+      }
+    }
+
+    await yieldToBrowser()
+  }
+
+  const rows = [...byPart.values()]
+  onProgress?.({
+    phase: 'parsing',
+    done: list.length,
+    total: list.length,
+    fileCount: list.length,
+    rowsSoFar: rows.length,
+  })
+
+  return {
+    rows,
+    perFile,
+    fileCount: list.length,
+    sheetName: list.length === 1 ? perFile[0].sheetName : `${list.length} files`,
+    headerRow: perFile[0]?.headerRow,
+    missingOptional: [...missingOptional],
+    duplicates,
+    skipped,
+  }
+}

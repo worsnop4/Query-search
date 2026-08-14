@@ -434,6 +434,34 @@ input[type='file']:focus-visible {
   margin: 2px 0 0;
 }
 
+.filelist {
+  margin-top: 12px;
+}
+
+.filelist summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.filelist summary:hover {
+  color: var(--text);
+}
+
+.filelist .tablewrap {
+  margin-top: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.ellipsis {
+  max-width: 340px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .cardmeta {
   display: flex;
   flex-direction: column;
