@@ -1,7 +1,9 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 const PAGE_SIZE = 100
+
+const ALL_ZONES = 'all'
 
 // One part number can return thousands of rows, but the limit here is about
 // URL length: .in() becomes a query string, and too many values overflow it.
@@ -29,9 +31,47 @@ function parseParts(text) {
 
 const nf = new Intl.NumberFormat()
 
+// "No rows found for X" is misleading when a filter is what excluded them, so
+// name the filters that are actually on.
+function filterNote(caseFilter, zoneFilter) {
+  const on = []
+  if (caseFilter !== 'all') on.push('this case filter')
+  if (zoneFilter !== ALL_ZONES) on.push(`zone type ${zoneFilter}`)
+  if (on.length === 0) return ''
+  return ` with ${on.join(' and ')}`
+}
+
+// The zone types actually present in the data, newest read wins. Read from the
+// `zone_types` view rather than hardcoded here - see the comment on that view.
+// A failure is not surfaced: the dropdown simply offers "All zone types",
+// which is the behaviour this page had before the filter existed.
+function useZoneTypes() {
+  const [zones, setZones] = useState([])
+
+  useEffect(() => {
+    let active = true
+    supabase
+      .from('zone_types')
+      .select('zone_type, row_count')
+      .order('row_count', { ascending: false })
+      .then(({ data, error }) => {
+        if (!active || error) return
+        setZones(data ?? [])
+      })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  return zones
+}
+
 export default function SearchPage() {
   const [input, setInput] = useState('')
   const [caseFilter, setCaseFilter] = useState('all')
+  const [zoneFilter, setZoneFilter] = useState(ALL_ZONES)
+
+  const zones = useZoneTypes()
 
   const [parts, setParts] = useState([])
   const [rows, setRows] = useState([])
@@ -58,11 +98,14 @@ export default function SearchPage() {
   // sets them, before React has committed the state update.
   const partsRef = useRef([])
 
-  async function fetchPage(searchParts, filter, pageIndex) {
+  // No index on zone_type, and none needed: .in('part_number', ...) narrows to
+  // at most a few thousand rows first, so the zone filter never scans the
+  // whole 194k-row table.
+  async function fetchPage(searchParts, filter, zone, pageIndex) {
     const from = pageIndex * PAGE_SIZE
     let q = supabase
       .from('inventory')
-      .select('part_number, case_no, location, quantity, is_case_opened', {
+      .select('part_number, case_no, location, zone_type, quantity, is_case_opened', {
         count: 'exact',
       })
       .in('part_number', searchParts)
@@ -72,6 +115,7 @@ export default function SearchPage() {
       .range(from, from + PAGE_SIZE - 1)
 
     if (filter !== 'all') q = q.eq('is_case_opened', filter)
+    if (zone !== ALL_ZONES) q = q.eq('zone_type', zone)
 
     const { data, count, error: err } = await q
     if (err) throw err
@@ -105,7 +149,7 @@ export default function SearchPage() {
 
     try {
       const [first, nameRes, foundRes] = await Promise.all([
-        fetchPage(searchParts, caseFilter, 0),
+        fetchPage(searchParts, caseFilter, zoneFilter, 0),
         supabase
           .from('master_data')
           .select('part_number, part_name')
@@ -138,12 +182,12 @@ export default function SearchPage() {
     }
   }
 
-  async function reload(filter, pageIndex, searchParts = partsRef.current) {
+  async function reload(filter, zone, pageIndex, searchParts = partsRef.current) {
     const reqId = ++reqRef.current
     setLoading(true)
     setError(null)
     try {
-      const { data, count } = await fetchPage(searchParts, filter, pageIndex)
+      const { data, count } = await fetchPage(searchParts, filter, zone, pageIndex)
       if (reqRef.current !== reqId) return
       setRows(data)
       setTotal(count)
@@ -156,9 +200,16 @@ export default function SearchPage() {
     }
   }
 
+  // Both filters go back to page 1: page 7 of the old result set says nothing
+  // about the new one, and may not exist in it at all.
   function changeFilter(value) {
     setCaseFilter(value)
-    if (searched) reload(value, 0)
+    if (searched) reload(value, zoneFilter, 0)
+  }
+
+  function changeZone(value) {
+    setZoneFilter(value)
+    if (searched) reload(caseFilter, value, 0)
   }
 
   function clearAll() {
@@ -215,6 +266,22 @@ export default function SearchPage() {
             </select>
           </div>
 
+          <div className="filter">
+            <label htmlFor="zf">Zone type</label>
+            <select
+              id="zf"
+              value={zoneFilter}
+              onChange={(e) => changeZone(e.target.value)}
+            >
+              <option value={ALL_ZONES}>All zone types</option>
+              {zones.map((z) => (
+                <option key={z.zone_type} value={z.zone_type}>
+                  {z.zone_type} ({nf.format(z.row_count)})
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="buttons">
             <button type="submit" disabled={loading}>
               {loading ? 'Searching...' : 'Search'}
@@ -239,7 +306,7 @@ export default function SearchPage() {
                 {parts.length === 1
                   ? parts[0]
                   : `these ${nf.format(parts.length)} part numbers`}
-                {caseFilter !== 'all' && ' with this case filter'}.
+                {filterNote(caseFilter, zoneFilter)}.
               </>
             ) : (
               <>
@@ -266,6 +333,7 @@ export default function SearchPage() {
                     <th>Part Name</th>
                     <th>Case No</th>
                     <th>Location</th>
+                    <th>Zone Type</th>
                     <th className="num">Qty</th>
                   </tr>
                 </thead>
@@ -282,6 +350,7 @@ export default function SearchPage() {
                       </td>
                       <td className="mono">{r.case_no}</td>
                       <td>{r.location}</td>
+                      <td>{r.zone_type}</td>
                       <td className="num">{nf.format(Number(r.quantity) || 0)}</td>
                     </tr>
                   ))}

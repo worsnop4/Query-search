@@ -9,15 +9,16 @@ const supabase = createClient(
 
 const PAGE_SIZE = 100
 
-async function fetchPage(parts, filter, pageIndex) {
+async function fetchPage(parts, filter, pageIndex, zone = 'all') {
   const from = pageIndex * PAGE_SIZE
   let q = supabase
     .from('inventory')
-    .select('part_number, case_no, location, quantity, is_case_opened', { count: 'exact' })
+    .select('part_number, case_no, location, zone_type, quantity, is_case_opened', { count: 'exact' })
     .in('part_number', parts)
     .order('part_number').order('location').order('case_no')
     .range(from, from + PAGE_SIZE - 1)
   if (filter !== 'all') q = q.eq('is_case_opened', filter)
+  if (zone !== 'all') q = q.eq('zone_type', zone)
   const { data, count, error } = await q
   if (error) throw new Error(`fetchPage: ${error.message}`)
   return { data: data ?? [], count: count ?? 0 }
@@ -71,6 +72,31 @@ const no = await fetchPage(['26184917'], 'No', 0)
 console.log(`  opened = ${yes.count.toLocaleString()}, not opened = ${no.count.toLocaleString()}`)
 ok('filters partition the total', yes.count + no.count === big.count,
    `${yes.count} + ${no.count} = ${yes.count + no.count} vs ${big.count}`)
+
+console.log('\n--- zone type filter ---')
+const zoneRes = await supabase.from('zone_types').select('zone_type, row_count').order('row_count', { ascending: false })
+if (zoneRes.error) {
+  ok('zone_types view exists', false, `${zoneRes.error.message} - run 02_search_helpers.sql`)
+} else {
+  const zones = zoneRes.data ?? []
+  ok('zone_types view readable', zones.length > 0, `${zones.length} zone types`)
+
+  const wholeTable = (await supabase.from('inventory').select('*', { count: 'exact', head: true })).count
+  const summed = zones.reduce((n, z) => n + Number(z.row_count), 0)
+  ok('view accounts for every row', summed === wholeTable,
+     `${summed.toLocaleString()} vs ${wholeTable.toLocaleString()}`)
+
+  // Filtering one part by each zone must partition that part's rows exactly -
+  // the same invariant the case-opened filter is checked against below.
+  let perZone = 0
+  for (const z of zones) {
+    const r = await fetchPage(['26184917'], 'all', 0, z.zone_type)
+    if (r.count > 0) console.log(`  ${z.zone_type.padEnd(18)} ${r.count.toLocaleString().padStart(6)}`)
+    perZone += r.count
+  }
+  ok('zone filters partition the part', perZone === big.count,
+     `${perZone} vs ${big.count}`)
+}
 
 console.log('\n--- sample output ---')
 for (const r of big.data.slice(0, 4)) {

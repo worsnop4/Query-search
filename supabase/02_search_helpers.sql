@@ -59,3 +59,31 @@ left join public.master_data m on m.part_number = i.part_number;
 
 alter view public.search_results set (security_invoker = on);
 grant select on public.search_results to anon, authenticated;
+
+
+-- ============================================================================
+-- Zone types present in the data, for the search page's filter dropdown.
+--
+-- Read from the data rather than hardcoded in the UI. Today all 194,377 rows
+-- fall into the same seven values the WMS has always produced - but the whole
+-- reason parse.js maps columns by header name is that this export's shape is
+-- not stable. A list baked into the frontend would silently omit an eighth
+-- value the day the WMS starts emitting one, and the rows carrying it would
+-- become unreachable through the filter without anything looking wrong.
+--
+-- One row per zone type, so this is a handful of rows however large the table
+-- gets. The count comes along for free and gives the dropdown something
+-- useful to show.
+-- ============================================================================
+drop view if exists public.zone_types;
+
+create view public.zone_types as
+select
+  zone_type,
+  count(*) as row_count
+from public.inventory
+where zone_type is not null and trim(zone_type) <> ''
+group by zone_type;
+
+alter view public.zone_types set (security_invoker = on);
+grant select on public.zone_types to anon, authenticated;
