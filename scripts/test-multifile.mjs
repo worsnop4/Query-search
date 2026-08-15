@@ -1,34 +1,26 @@
 // Runs the real multi-file browser parser against the 39 raw WMS exports,
 // and checks the combined result against the macro-merged file for the same day.
 //
-//   node scripts/test-multifile.mjs
-import fs from 'node:fs'
-import path from 'node:path'
+//   node scripts/test-multifile.mjs                    # fallback folder
+//   node scripts/test-multifile.mjs ~/data/query-raw   # explicit folder
+//   QUERY_DATA_DIR=~/data/query-raw node scripts/test-multifile.mjs
 import { parseInventoryFiles } from '../src/lib/parse.js'
+import { fileFrom, checker, dataDir, workbooksIn, noDataMessage } from './lib.mjs'
 
-const RAW_DIR = 'C:/Users/INV-ENGINEER/Downloads/query raw'
+const FALLBACK_DIR = 'C:/Users/INV-ENGINEER/Downloads/query raw'
+const { check, report } = checker()
 
-function fileFrom(p) {
-  const b = fs.readFileSync(p)
-  const ab = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)
-  return { name: path.basename(p), arrayBuffer: async () => ab }
+const RAW_DIR = dataDir(FALLBACK_DIR)
+if (!RAW_DIR) {
+  console.error(noDataMessage('raw export folder'))
+  process.exit(1)
 }
 
-let failed = 0
-function check(label, cond, detail = '') {
-  if (!cond) failed++
-  console.log(`   ${cond ? 'PASS' : 'FAIL'}  ${label}${detail ? '  -> ' + detail : ''}`)
+const paths = workbooksIn(RAW_DIR, /\.(xls|xlsx|xlsm)$/i)
+if (paths.length === 0) {
+  console.error(`No .xls/.xlsx/.xlsm files in ${RAW_DIR}`)
+  process.exit(1)
 }
-
-if (!fs.existsSync(RAW_DIR)) {
-  console.log(`SKIP - folder not found: ${RAW_DIR}`)
-  process.exit(0)
-}
-
-const paths = fs
-  .readdirSync(RAW_DIR)
-  .filter((f) => /\.(xls|xlsx|xlsm)$/i.test(f))
-  .map((f) => path.join(RAW_DIR, f))
 
 console.log(`=== parsing ${paths.length} raw files as one upload\n`)
 
@@ -53,7 +45,13 @@ if (out.missingOptional.length) console.log(`   optional missing: ${out.missingO
 console.log('')
 
 check('all files parsed', out.fileCount === paths.length, `${out.fileCount}/${paths.length}`)
-check('row count matches standalone scan', out.rows.length === 194278, out.rows.length.toLocaleString())
+// 194,278 is the count recorded from the 14-08 export. Only assert it against
+// that same folder; any other day legitimately has a different total.
+if (RAW_DIR === FALLBACK_DIR) {
+  check('row count matches standalone scan', out.rows.length === 194278, out.rows.length.toLocaleString())
+} else {
+  check('produced rows', out.rows.length > 0, out.rows.length.toLocaleString())
+}
 check('every file found its header on row 3', out.perFile.every((f) => f.headerRow === 3))
 check('no file produced zero rows', out.perFile.every((f) => f.rows > 0),
       out.perFile.filter((f) => f.rows === 0).map((f) => f.name).join(',') || 'none')
@@ -78,7 +76,11 @@ check('no blank part numbers', blank === 0, String(blank))
 
 const parts = new Set(out.rows.map((r) => r.part_number))
 console.log(`   distinct part numbers: ${parts.size.toLocaleString()}`)
-check('part count in expected range', parts.size > 11000 && parts.size < 12000, String(parts.size))
+// Like the row count above, this range describes the recorded export only.
+if (RAW_DIR === FALLBACK_DIR) {
+  check('part count in expected range', parts.size > 11000 && parts.size < 12000, String(parts.size))
+} else {
+  check('found distinct part numbers', parts.size > 0, String(parts.size))
+}
 
-console.log(failed === 0 ? '\nALL CHECKS PASSED' : `\n${failed} CHECK(S) FAILED`)
-process.exit(failed === 0 ? 0 : 1)
+report()

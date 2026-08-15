@@ -1,23 +1,19 @@
 // Runs the real browser parser (src/lib/parse.js) against the actual WMS
 // exports, checking that header-name mapping survives the shifting layouts.
 //
-//   node scripts/test-parser.mjs
-import fs from 'node:fs'
+//   node scripts/test-parser.mjs                  # the fallback paths below
+//   node scripts/test-parser.mjs ~/data           # every workbook in a folder
+//   node scripts/test-parser.mjs a.xlsm b.xlsm    # specific files
+//
+// Point it at the master data with --master=/path/to.xlsb or $QUERY_MASTER.
 import { parseInventory, parseMasterData } from '../src/lib/parse.js'
+import { fileFrom, checker, resolveWorkbooks, namedFile, noDataMessage } from './lib.mjs'
 
-function fileFrom(path) {
-  const b = fs.readFileSync(path)
-  const ab = b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)
-  return { name: path.split(/[\\/]/).pop(), arrayBuffer: async () => ab }
-}
+const { check, report } = checker()
 
-let failed = 0
-function check(label, cond, detail = '') {
-  if (!cond) failed++
-  console.log(`   ${cond ? 'PASS' : 'FAIL'}  ${label}${detail ? '  -> ' + detail : ''}`)
-}
-
-const INVENTORY_FILES = [
+// Where the data sits on the machine it was captured on. Overridable - see
+// the header above - so this test is runnable anywhere the files are.
+const FALLBACK_INVENTORY = [
   'C:/Users/INV-ENGINEER/Downloads/Query - 14-08-2026 (08.20).xlsm',
   'C:/Users/INV-ENGINEER/Downloads/Query - 13-08-2026 (08.20).xlsm',
   'C:/Users/INV-ENGINEER/Downloads/Query -12-08-2026 (07.36).xlsm',
@@ -25,6 +21,15 @@ const INVENTORY_FILES = [
   'C:/Users/INV-ENGINEER/Downloads/Query - 07-08-2026 (13.10).xlsm',
   'D:/project/template querry upload.xlsm',
 ]
+const FALLBACK_MASTER = 'D:/project/PFEP Simple Master Data_12 Aug 2026.xlsb'
+
+const INVENTORY_FILES = resolveWorkbooks(FALLBACK_INVENTORY)
+const MASTER = namedFile('master', 'QUERY_MASTER', FALLBACK_MASTER)
+
+if (INVENTORY_FILES.length === 0 && !MASTER) {
+  console.error(noDataMessage('workbooks'))
+  process.exit(1)
+}
 
 const ZONE_TYPES = new Set([
   'DLOC Area', 'Stock Area-LOC', 'OF Area', 'Stock Area-Temp',
@@ -32,8 +37,7 @@ const ZONE_TYPES = new Set([
 ])
 
 for (const path of INVENTORY_FILES) {
-  if (!fs.existsSync(path)) { console.log(`\nSKIP (missing): ${path}`); continue }
-  const name = path.split('/').pop()
+  const name = path.split(/[\\/]/).pop()
   console.log(`\n=== ${name}`)
 
   const t0 = Date.now()
@@ -41,8 +45,7 @@ for (const path of INVENTORY_FILES) {
   try {
     out = await parseInventory(fileFrom(path))
   } catch (err) {
-    failed++
-    console.log(`   FAIL  threw: ${err.message}`)
+    check('parsed without throwing', false, err.message)
     continue
   }
   const secs = ((Date.now() - t0) / 1000).toFixed(1)
@@ -71,9 +74,8 @@ for (const path of INVENTORY_FILES) {
 }
 
 // ---- master data ----
-const MASTER = 'D:/project/PFEP Simple Master Data_12 Aug 2026.xlsb'
-if (fs.existsSync(MASTER)) {
-  console.log(`\n=== ${MASTER.split('/').pop()}`)
+if (MASTER) {
+  console.log(`\n=== ${MASTER.split(/[\\/]/).pop()}`)
   const t0 = Date.now()
   const out = await parseMasterData(fileFrom(MASTER))
   const secs = ((Date.now() - t0) / 1000).toFixed(1)
@@ -81,7 +83,13 @@ if (fs.existsSync(MASTER)) {
 
   const f = out.rows[0]
   console.log(`   first row: ${JSON.stringify(f)}`)
-  check('18630 rows', out.rows.length === 18630, String(out.rows.length))
+  // The exact count only means something for the file it was recorded from;
+  // against any other master file it would be a guaranteed failure.
+  if (MASTER === FALLBACK_MASTER) {
+    check('18630 rows', out.rows.length === 18630, String(out.rows.length))
+  } else {
+    check('parsed a plausible number of rows', out.rows.length > 1000, String(out.rows.length))
+  }
   check('part_name present', !!f.part_name, f.part_name)
 
   // "OLD DLOC" and "NEW DLOC" sit next to each other in the file, so verify
@@ -90,14 +98,17 @@ if (fs.existsSync(MASTER)) {
   const XLSX = await import('xlsx')
   const wb = XLSX.read(await fileFrom(MASTER).arrayBuffer(), { type: 'array', dense: true })
   const grid = XLSX.utils.sheet_to_json(wb.Sheets.MASDAT, { header: 1, raw: true, defval: null, blankrows: true })
-  const hdr = grid[2].map((h) => String(h ?? '').replace(/\s+/g, ' ').trim().toUpperCase())
+  // Use the header row the parser actually found rather than assuming row 3,
+  // so this cross-check still lines up if the file's preamble changes.
+  const hdrIdx = out.headerRow - 1
+  const hdr = (grid[hdrIdx] ?? []).map((h) => String(h ?? '').replace(/\s+/g, ' ').trim().toUpperCase())
   const iNew = hdr.indexOf('NEW DLOC')
   const iOld = hdr.indexOf('OLD DLOC')
   const iPn = hdr.indexOf('PART NUMBER')
   console.log(`   column indices: PART NUMBER=${iPn} OLD DLOC=${iOld} NEW DLOC=${iNew}`)
 
   const truth = new Map()
-  for (let r = 3; r < grid.length; r++) {
+  for (let r = hdrIdx + 1; r < grid.length; r++) {
     const row = grid[r]
     if (!row) continue
     const pn = row[iPn]
@@ -120,5 +131,4 @@ if (fs.existsSync(MASTER)) {
   check('dloc matches NEW DLOC exactly', wrong === 0, `${wrong} mismatches (${matchedOld} equal to OLD DLOC)`)
 }
 
-console.log(failed === 0 ? '\nALL CHECKS PASSED' : `\n${failed} CHECK(S) FAILED`)
-process.exit(failed === 0 ? 0 : 1)
+report()

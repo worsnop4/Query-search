@@ -1,9 +1,23 @@
+// Surveys the raw WMS exports: sheet names, distinct header layouts, row and
+// duplicate counts. This is how the shifting-column problem was found.
+//
+//   node scripts/inspect-raw.mjs [folder]      # or set $QUERY_DATA_DIR
 import fs from 'node:fs'
 import path from 'node:path'
 import * as XLSX from 'xlsx'
+import { dataDir, noDataMessage } from './lib.mjs'
 
-const dir = 'C:/Users/INV-ENGINEER/Downloads/query raw'
+const dir = dataDir('C:/Users/INV-ENGINEER/Downloads/query raw')
+if (!dir) {
+  console.error(noDataMessage('raw export folder'))
+  process.exit(1)
+}
+
 const files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.xls')).sort()
+if (files.length === 0) {
+  console.error(`No .xls files in ${dir}`)
+  process.exit(1)
+}
 
 console.log(`${files.length} files\n`)
 

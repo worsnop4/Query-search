@@ -1,5 +1,10 @@
+// Compares the duplicate rate in the macro-merged workbook against a single
+// raw file, to confirm the duplicates come from the source and not the merge.
+//
+//   node scripts/dupcheck.mjs [raw-folder] [--merged=/path/to.xlsm]
 import fs from 'node:fs'
 import * as XLSX from 'xlsx'
+import { dataDir, namedFile, noDataMessage } from './lib.mjs'
 
 const norm = (h) => String(h ?? '').replace(/\s+/g, ' ').trim().toUpperCase()
 const key = (v) =>
@@ -42,15 +47,37 @@ function dupRate(grid, label) {
   return { rows, dups }
 }
 
+const grid = (p) => {
+  const wb = XLSX.read(fs.readFileSync(p), { type: 'buffer', dense: true })
+  return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {
+    header: 1, raw: true, defval: null, blankrows: true,
+  })
+}
+
 // merged file produced by the macro
-const merged = 'C:/Users/INV-ENGINEER/Downloads/Query - 14-08-2026 (08.20).xlsm'
-const wb = XLSX.read(fs.readFileSync(merged), { type: 'buffer', dense: true })
-dupRate(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: null, blankrows: true }),
-        'MERGED  Query - 14-08-2026 (08.20).xlsm  [macro output]')
+const merged = namedFile(
+  'merged',
+  'QUERY_MERGED',
+  'C:/Users/INV-ENGINEER/Downloads/Query - 14-08-2026 (08.20).xlsm'
+)
+if (merged) {
+  dupRate(grid(merged), `MERGED  ${merged.split(/[\\/]/).pop()}  [macro output]`)
+} else {
+  console.log('MERGED file not found - pass --merged=/path/to.xlsm to include it\n')
+}
 
 // one single raw file on its own
-const dir = 'C:/Users/INV-ENGINEER/Downloads/query raw'
-const files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.xls')).sort()
-const wb1 = XLSX.read(fs.readFileSync(`${dir}/${files[0]}`), { type: 'buffer', dense: true })
-dupRate(XLSX.utils.sheet_to_json(wb1.Sheets[wb1.SheetNames[0]], { header: 1, raw: true, defval: null, blankrows: true }),
-        `SINGLE RAW FILE  ${files[0].slice(0, 24)}...`)
+const dir = dataDir('C:/Users/INV-ENGINEER/Downloads/query raw')
+if (!dir) {
+  if (!merged) {
+    console.error(noDataMessage('raw export folder'))
+    process.exit(1)
+  }
+} else {
+  const files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.xls')).sort()
+  if (files.length === 0) {
+    console.log(`No .xls files in ${dir}`)
+  } else {
+    dupRate(grid(`${dir}/${files[0]}`), `SINGLE RAW FILE  ${files[0].slice(0, 24)}...`)
+  }
+}

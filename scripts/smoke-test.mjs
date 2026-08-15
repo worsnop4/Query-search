@@ -55,7 +55,11 @@ console.log(`  pages: ${Math.ceil(first.count / PAGE_SIZE)}`)
 
 console.log('\n--- single part with the most rows (26184917) ---')
 const big = await fetchPage(['26184917'], 'all', 0)
-ok('4205 rows expected', big.count === 4205, `count = ${big.count}`)
+// Was `=== 4205`, the count on the day this was written. Inventory is replaced
+// daily, so an exact figure fails on every run that is not that day and says
+// nothing about whether the app works. What matters is that the part still
+// returns a substantial result set; the invariants below do the real checking.
+ok('returns a substantial row count', big.count > 1000, `count = ${big.count.toLocaleString()}`)
 
 const lastPage = Math.ceil(big.count / PAGE_SIZE) - 1
 const tail = await fetchPage(['26184917'], 'all', lastPage)
