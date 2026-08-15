@@ -7,10 +7,12 @@ import {
   formatWhen,
   relativeTime,
 } from '../lib/useLastUpdate'
+import { useAdminPresence, listNames } from '../lib/useAdminPresence'
 
 const nf = new Intl.NumberFormat()
 
 const PHASE_LABEL = {
+  claiming: 'Reserving the upload...',
   reading: 'Reading files...',
   parsing: 'Reading files...',
   clearing: 'Preparing database...',
@@ -20,7 +22,11 @@ const PHASE_LABEL = {
 }
 
 // Which step of the whole operation each phase belongs to, for "Step 2 of 3".
-const PHASE_STEP = { reading: 1, parsing: 1, clearing: 2, uploading: 2, swapping: 3, done: 3 }
+const PHASE_STEP = {
+  reading: 1, parsing: 1,
+  claiming: 2, clearing: 2, uploading: 2,
+  swapping: 3, done: 3,
+}
 
 function formatDuration(secs) {
   if (secs < 60) return `${secs}s`
@@ -75,7 +81,7 @@ function CardLastUpdate({ table }) {
   )
 }
 
-function UploadCard({ config }) {
+function UploadCard({ config, sessionId, uploader, onFinished }) {
   const [files, setFiles] = useState([])
   const [parsed, setParsed] = useState(null)
   const [progress, setProgress] = useState(null)
@@ -129,6 +135,10 @@ function UploadCard({ config }) {
     if (picked.length === 0) return
 
     setFiles(picked)
+    // Reset the clock here, not only in the effect below: the effect runs
+    // after paint, so the first frame would otherwise still show the previous
+    // phase's duration.
+    setElapsed(0)
     setBusy(true)
     // Show something immediately: reading the first file can take seconds
     // before the parser reports any progress of its own.
@@ -145,7 +155,12 @@ function UploadCard({ config }) {
       const out = await config.parse(picked, setProgress)
       setParsed(out)
     } catch (err) {
-      setError(err.message ?? String(err))
+      // Nothing has been sent anywhere at this point - say so, rather than
+      // reporting a failed upload the admin then has to go and check.
+      setError({
+        title: 'Could not read that file.',
+        message: err.message ?? String(err),
+      })
     } finally {
       setBusy(false)
       setProgress(null)
@@ -154,6 +169,7 @@ function UploadCard({ config }) {
 
   async function doUpload() {
     if (!parsed) return
+    setElapsed(0)
     setBusy(true)
     setError(null)
     setResult(null)
@@ -163,6 +179,7 @@ function UploadCard({ config }) {
     try {
       const moved = await replaceTable({
         ...config.target,
+        sessionId,
         rows: parsed.rows,
         onProgress: setProgress,
         shouldCancel: () => cancelRef.current,
@@ -177,12 +194,19 @@ function UploadCard({ config }) {
       if (inputRef.current) inputRef.current.value = ''
       notifyDataUpdated() // refresh the "Last update" in the header
     } catch (err) {
-      setError(err.message ?? String(err))
+      setError({ title: 'Upload failed.', message: err.message ?? String(err) })
     } finally {
       setBusy(false)
       setProgress(null)
+      // Whether it worked or not, the claim has moved - let the other cards
+      // and the roster catch up without waiting for the next poll.
+      onFinished?.()
     }
   }
+
+  // Another admin holds this table. The server would refuse anyway; blocking
+  // here just saves them parsing a 195k-row file only to be turned away.
+  const lockedBy = uploader?.display_name ?? null
 
   const pct =
     progress && progress.total > 0
@@ -201,13 +225,21 @@ function UploadCard({ config }) {
 
       <p className="hint">{config.hint}</p>
 
+      {lockedBy && (
+        <div className="locked">
+          <strong>{lockedBy} is updating {config.title} right now.</strong>{' '}
+          This card unlocks by itself the moment they finish
+          {uploader.started_at && ` (started ${relativeTime(uploader.started_at)})`}.
+        </div>
+      )}
+
       <input
         ref={inputRef}
         type="file"
         accept={config.accept}
         multiple={config.multiple}
         onChange={onPick}
-        disabled={busy}
+        disabled={busy || !!lockedBy}
       />
 
       {files.length > 1 && !parsed && !error && (
@@ -282,7 +314,7 @@ function UploadCard({ config }) {
 
       {error && (
         <div className="error">
-          <strong>Upload failed.</strong> {error}
+          <strong>{error.title}</strong> {error.message}
         </div>
       )}
 
@@ -405,8 +437,10 @@ function UploadCard({ config }) {
           <div className="danger">{config.affects}</div>
 
           <div className="buttons">
-            <button type="button" onClick={doUpload} disabled={busy}>
-              Replace all {config.replaceLabel} ({nf.format(parsed.rows.length)} rows)
+            <button type="button" onClick={doUpload} disabled={busy || !!lockedBy}>
+              {lockedBy
+                ? `Locked - ${lockedBy} is updating this`
+                : `Replace all ${config.replaceLabel} (${nf.format(parsed.rows.length)} rows)`}
             </button>
             <button type="button" className="ghost" onClick={reset} disabled={busy}>
               Cancel
@@ -418,7 +452,35 @@ function UploadCard({ config }) {
   )
 }
 
+function Roster({ others }) {
+  if (others.length === 0) {
+    return <p className="muted small">You are the only admin on this page.</p>
+  }
+
+  return (
+    <div className="roster">
+      <span className="muted small">Also here</span>
+      {others.map((a) => (
+        <span
+          key={a.session_id}
+          className={`chip${a.status === 'uploading' ? ' busy' : ''}`}
+          title={a.status === 'uploading' ? `Updating ${a.target}` : 'Viewing'}
+        >
+          {a.display_name}
+        </span>
+      ))}
+      <span className="muted small">
+        {others.some((a) => a.status === 'uploading')
+          ? `${listNames(others.filter((a) => a.status === 'uploading'))} updating`
+          : 'viewing only'}
+      </span>
+    </div>
+  )
+}
+
 export default function AdminPage() {
+  const { sessionId, others, uploaderOf, refresh } = useAdminPresence(true)
+
   return (
     <div className="admin">
       <p className="muted small lead">
@@ -426,8 +488,17 @@ export default function AdminPage() {
         once every row has arrived and the count matches, so a failed or
         cancelled upload leaves the live data untouched.
       </p>
+
+      <Roster others={others} />
+
       {UPLOADS.map((u) => (
-        <UploadCard key={u.id} config={u} />
+        <UploadCard
+          key={u.id}
+          config={u}
+          sessionId={sessionId}
+          uploader={uploaderOf(u.logTable)}
+          onFinished={refresh}
+        />
       ))}
     </div>
   )

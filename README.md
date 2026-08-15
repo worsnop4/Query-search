@@ -109,9 +109,41 @@ Run these in the SQL Editor, in order. All are safe to re-run.
 | `supabase/02_search_helpers.sql` | `found_part_numbers` RPC, `search_results` view |
 | `supabase/03_upload_log.sql` | `upload_log` table, logging swaps, `latest_upload` view |
 | `supabase/04_fix_upload_log_backfill.sql` | One-off repair, only if you ran the first version of 03 |
+| `supabase/05_admin_presence.sql` | `admin_session` table, `active_admins` view, the upload claim, and claim-checked `reset_*`/`swap_*` |
+
+Re-running `setup.sql` reverts objects that 02, 03 and 05 replace — run those
+three again afterwards, in order.
+
+**05 is a breaking change.** It drops the old `reset_*_staging()` and
+`swap_*(bigint)` signatures in favour of versions that take a session id, so
+run it and deploy the frontend together. In between, uploads fail with
+*function does not exist*.
 
 Admin accounts are created by hand in **Authentication → Users** with
 *Auto Confirm* ticked. Public sign-up must stay **off**.
+
+### One admin per table at a time
+
+Signing in is never blocked — two admins can be in at once. What is exclusive
+is *uploading a given table*: pressing Replace takes a claim, and the second
+admin's card locks with the holder's name until they finish. Uploads to
+**different** tables run concurrently, since they share nothing.
+
+The claim is enforced in Postgres, not the browser: `reset_*_staging()` and
+`swap_*()` refuse to run without one, so calling the API directly with a valid
+JWT gets you nowhere. A tab that dies mid-upload holds the claim until its
+heartbeat goes stale, 90 seconds, and then the table frees itself — there is no
+lock to clear by hand.
+
+Names are the email's local part (`dian.ayu@panli.com` → `dian.ayu`), computed
+in the database from the caller's JWT, so nobody can display as someone else.
+The domain is dropped deliberately.
+
+The `active_admins` view is readable anonymously, so the login page can show
+who is in before you sign in. It exposes **only** the name, status and
+timestamps — never the email or user id. Be aware this does publish valid
+email local parts on a page anyone with the URL can reach; that is an accepted
+trade-off for an internal site, and the reason the domain is left off.
 
 ## How the data works
 
@@ -148,6 +180,23 @@ re-upload needed.
 
 | Command | Purpose |
 |---|---|
-| `node scripts/test-parser.mjs` | Runs the real parser against local `.xlsm`/`.xlsb` files and checks every field lands in the right column |
+| `node scripts/test-parser.mjs [path...]` | Runs the real parser against local `.xlsm`/`.xlsb` files and checks every field lands in the right column |
+| `node scripts/test-multifile.mjs [folder]` | Parses a whole folder of raw exports as one upload, as the admin page does |
+| `node scripts/inspect-raw.mjs [folder]` | Surveys the raw exports: sheet names, distinct header layouts, duplicate counts |
+| `node scripts/dupcheck.mjs [folder]` | Compares the duplicate rate in a merged workbook against a single raw file |
 | `node --env-file=.env scripts/smoke-test.mjs` | Runs the search page's queries against live Supabase |
+| `node --env-file=.env scripts/test-presence.mjs` | Signs in as two admins and proves one blocks the other, including via direct API calls |
 | `scripts/export-csv.ps1` | Converts the workbooks to CSV for manual Supabase import (needs Excel; only used for the initial load) |
+
+The four workbook scripts take a path, or read `$QUERY_DATA_DIR`; with neither
+they fall back to the Windows paths of the machine the data was captured on.
+`test-parser.mjs` also takes `--master=<file>` (or `$QUERY_MASTER`).
+
+```bash
+node scripts/test-parser.mjs ~/data/exports
+QUERY_DATA_DIR=~/data/exports node scripts/test-multifile.mjs
+```
+
+A script that finds no data **exits non-zero**. It used to skip the missing
+files and still print `ALL CHECKS PASSED`, so on any machine but that one a
+broken parser was indistinguishable from a working one.

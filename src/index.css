@@ -612,3 +612,50 @@ input[type='file'] {
   border: 1px solid var(--warn-border);
   color: var(--warn-text);
 }
+
+/* --- admin presence ------------------------------------------------------ */
+
+.roster {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+/* Sized to its content: these hold names like "dian.ayu", not fixed-width
+   initials, so a min-width would only add dead space around short ones. */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  max-width: 220px;
+  padding: 0 10px;
+  border-radius: 13px;
+  border: 1px solid var(--border);
+  background: var(--row-alt);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An admin mid-upload. Colour alone would not carry this for a colour-blind
+   viewer, so the roster prints "DA updating" next to the chips as well. */
+.chip.busy {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--warn-text);
+}
+
+.locked {
+  margin-top: 16px;
+  padding: 11px 14px;
+  border-radius: 8px;
+  font-size: 14px;
+  background: var(--warn-bg);
+  border: 1px solid var(--warn-border);
+  color: var(--warn-text);
+}

@@ -9,6 +9,7 @@ import {
 } from 'react-router-dom'
 import { AuthProvider, useAuth } from './lib/AuthContext'
 import { useLastUpdate, formatWhen, relativeTime } from './lib/useLastUpdate'
+import { useSessionId } from './lib/useAdminPresence'
 import { supabase } from './lib/supabase'
 import SearchPage from './pages/SearchPage'
 import LoginPage from './pages/LoginPage'
@@ -27,9 +28,11 @@ function RequireAuth({ children }) {
 }
 
 function LastUpdate() {
-  const { info, loading } = useLastUpdate('inventory')
+  const { info, loading, error } = useLastUpdate('inventory')
 
-  if (loading) return <div className="lastupdate" />
+  // Say nothing if the read failed - claiming "no data" when we simply could
+  // not reach the database is worse than showing nothing.
+  if (loading || (!info && error)) return <div className="lastupdate" />
   if (!info) {
     return (
       <div className="lastupdate">
@@ -52,7 +55,16 @@ function LastUpdate() {
 function TopBar() {
   const { session } = useAuth()
   const location = useLocation()
+  const sessionId = useSessionId()
   const onAdmin = location.pathname.startsWith('/admin')
+
+  // Drop the presence row before the token goes away - admin_release needs a
+  // valid session to identify the caller, so it cannot be done afterwards.
+  // An upload in flight is left alone; that row ages out on its own.
+  async function signOut() {
+    await supabase.rpc('admin_release', { p_session_id: sessionId })
+    await supabase.auth.signOut()
+  }
 
   return (
     <header className="topbar">
@@ -80,7 +92,7 @@ function TopBar() {
           <button
             type="button"
             className="ghost small"
-            onClick={() => supabase.auth.signOut()}
+            onClick={signOut}
             title={session.user.email}
           >
             Sign out
