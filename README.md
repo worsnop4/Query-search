@@ -150,11 +150,17 @@ trade-off for an internal site, and the reason the domain is left off.
 ## Searching and exporting
 
 The search page filters by **Case opened** and by **Zone type**, and both apply
-together. The zone list comes from the `zone_types` view rather than a list
-baked into the page, so a zone type the WMS starts emitting tomorrow appears on
-its own instead of silently having its rows become unfilterable. Zone Type is
-shown as a column too — a filter whose effect you cannot see in the results is
-hard to trust.
+together. Zone type is a row of toggles rather than a dropdown, because any
+number of them can be on at once — nothing selected means no filter, and a
+selection is a whitelist. Zone Type is shown as a column too: a filter whose
+effect you cannot see in the results is hard to trust.
+
+The zone list comes from the `zone_types` view rather than a list baked into
+the page, so a zone type the WMS starts emitting tomorrow appears on its own
+instead of silently having its rows become unfilterable. The view's row counts
+order the toggles, most-used first, but are not displayed — they describe the
+whole table, not the part numbers you happen to be searching, and sitting next
+to the filter they read as a promise about matches.
 
 No index on `zone_type`, and none needed: every search narrows by
 `part_number` first, so the zone filter only ever touches a few thousand rows.

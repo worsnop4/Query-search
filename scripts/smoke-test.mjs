@@ -9,7 +9,8 @@ const supabase = createClient(
 
 const PAGE_SIZE = 100
 
-async function fetchPage(parts, filter, pageIndex, zone = 'all') {
+// `zones` is a whitelist; empty means no zone filter, matching the page.
+async function fetchPage(parts, filter, pageIndex, zones = []) {
   const from = pageIndex * PAGE_SIZE
   let q = supabase
     .from('inventory')
@@ -18,7 +19,7 @@ async function fetchPage(parts, filter, pageIndex, zone = 'all') {
     .order('part_number').order('location').order('case_no')
     .range(from, from + PAGE_SIZE - 1)
   if (filter !== 'all') q = q.eq('is_case_opened', filter)
-  if (zone !== 'all') q = q.eq('zone_type', zone)
+  if (zones.length > 0) q = q.in('zone_type', zones)
   const { data, count, error } = await q
   if (error) throw new Error(`fetchPage: ${error.message}`)
   return { data: data ?? [], count: count ?? 0 }
@@ -88,14 +89,29 @@ if (zoneRes.error) {
 
   // Filtering one part by each zone must partition that part's rows exactly -
   // the same invariant the case-opened filter is checked against below.
+  const counts = {}
   let perZone = 0
   for (const z of zones) {
-    const r = await fetchPage(['26184917'], 'all', 0, z.zone_type)
+    const r = await fetchPage(['26184917'], 'all', 0, [z.zone_type])
+    counts[z.zone_type] = r.count
     if (r.count > 0) console.log(`  ${z.zone_type.padEnd(18)} ${r.count.toLocaleString().padStart(6)}`)
     perZone += r.count
   }
   ok('zone filters partition the part', perZone === big.count,
      `${perZone} vs ${big.count}`)
+
+  // Several zones at once: the filter is a whitelist, so selecting two must
+  // return exactly the two added together, and selecting none must not filter.
+  const present = zones.map((z) => z.zone_type).filter((z) => counts[z] > 0)
+  if (present.length >= 2) {
+    const [a, b] = present
+    const both = await fetchPage(['26184917'], 'all', 0, [a, b])
+    ok('two zones return the sum of both', both.count === counts[a] + counts[b],
+       `${both.count} vs ${counts[a]} + ${counts[b]}`)
+  }
+  const noZone = await fetchPage(['26184917'], 'all', 0, [])
+  ok('no zone selected means no filter', noZone.count === big.count,
+     `${noZone.count} vs ${big.count}`)
 }
 
 console.log('\n--- sample output ---')

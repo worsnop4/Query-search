@@ -659,3 +659,146 @@ input[type='file'] {
   border: 1px solid var(--warn-border);
   color: var(--warn-text);
 }
+
+/* --- zone type filter ----------------------------------------------------- */
+
+/* A flex item of .controls now, taking a full row of its own so the case
+   dropdown and the Search buttons keep the row above to themselves. */
+.zonefilter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-basis: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.zonefilter legend {
+  padding: 0;
+  margin-right: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.zonechips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Wide enough for every filter to sit out in the open: no button, nothing to
+   expand, and `filtersOpen` never gets consulted. */
+.filtertoggle {
+  display: none;
+}
+
+.zonechip {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 15px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  user-select: none;
+}
+
+.zonechip:hover {
+  border-color: var(--muted);
+}
+
+.zonechip.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+/* The checkbox stays in the tab order and keeps its semantics; only its own
+   painting is removed, so the pill around it is what you see. */
+.zonechip input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  margin: 0;
+  pointer-events: none;
+}
+
+.zonechip:focus-visible,
+.zonechip:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* On a phone the case dropdown plus seven wrapping zone chips pushed the
+   Search button off the first screen. Below this width every filter folds
+   behind one button, which carries a count so a collapsed panel can never
+   hide the fact that something is being filtered out. */
+@media (max-width: 640px) {
+  .filtertoggle {
+    display: inline-flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 14px;
+    border-radius: 17px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 550;
+    font-family: inherit;
+    cursor: pointer;
+  }
+
+  /* Filters are on. Say so on the button itself, not only by the count -
+     colour and number together survive a glance. */
+  .filtertoggle.on {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--accent-text);
+  }
+
+  /* Search and Clear must not move when the panel opens - they are what you
+     came to press. Putting them ahead of both filters in the visual order
+     means opening the panel grows the form downwards underneath them,
+     instead of shunting them into the middle of it. */
+  .controls .filtertoggle {
+    order: 1;
+  }
+  .controls .buttons {
+    order: 2;
+  }
+  .controls .filter {
+    order: 3;
+  }
+  .controls .zonefilter {
+    order: 4;
+  }
+
+  .controls .filter,
+  .zonefilter {
+    display: none;
+  }
+
+  /* Each gets its own full-width row once open, rather than being squeezed
+     in beside the toggle and the Search button. */
+  .controls.filters-open .filter {
+    display: block;
+    flex-basis: 100%;
+  }
+
+  .zonefilter.open {
+    display: flex;
+  }
+
+  .zonefilter.open .zonechips {
+    flex-basis: 100%;
+  }
+}
