@@ -19,6 +19,86 @@ npm run dev
 Node is required. If `node` is not found, it is installed portable at
 `%LOCALAPPDATA%\nodejs` — open a fresh terminal or add that folder to PATH.
 
+## Moving to another machine
+
+Supabase and Vercel are both cloud services — **nothing needs migrating there.**
+The database, its data, the SQL functions and the admin accounts all stay exactly
+as they are. Only the local development setup has to be rebuilt.
+
+### 1. Install Node.js
+
+With admin rights, the normal installer is fine:
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
+
+Without admin rights, use the portable build (this is what the first machine
+has, because the UAC prompt could not be answered):
+
+```powershell
+$ver = 'v24.19.0'; $dest = "$env:LOCALAPPDATA\nodejs"
+Invoke-WebRequest "https://nodejs.org/dist/$ver/node-$ver-win-x64.zip" -OutFile "$env:TEMP\node.zip"
+Expand-Archive "$env:TEMP\node.zip" "$env:LOCALAPPDATA\node-tmp" -Force
+Move-Item (Get-ChildItem "$env:LOCALAPPDATA\node-tmp" -Directory)[0].FullName $dest
+[Environment]::SetEnvironmentVariable('Path',
+  [Environment]::GetEnvironmentVariable('Path','User') + ";$dest", 'User')
+```
+
+### 2. Install Git
+
+`winget install Git.Git` with admin, or the portable MinGit zip from
+[git-for-windows releases](https://github.com/git-for-windows/git/releases)
+extracted to `%LOCALAPPDATA%\mingit`, adding `%LOCALAPPDATA%\mingit\cmd` to PATH
+the same way as above.
+
+**Restart VS Code completely afterwards** — terminals inherit PATH from when
+VS Code started, so a new terminal alone is not enough.
+
+### 3. Clone and install
+
+```powershell
+git clone https://github.com/worsnop4/Query-search.git
+cd Query-search
+npm install
+```
+
+### 4. Recreate `.env`
+
+`.env` is deliberately not committed. Copy it across from the old machine, or
+rebuild it from **Supabase → Project Settings → API Keys** (the same values are
+also in **Vercel → Settings → Environment Variables**):
+
+```
+VITE_SUPABASE_URL=https://smjzdmcaojaumdtrqdpg.supabase.co
+VITE_SUPABASE_ANON_KEY=<publishable key>
+```
+
+### 5. Check it works
+
+```powershell
+npm run dev
+node --env-file=.env scripts/smoke-test.mjs
+```
+
+The smoke test queries live Supabase, so it confirms the whole chain in one go.
+
+### Optional — the source workbooks
+
+Only needed to re-run the parser tests. They are gitignored (large, and internal
+data), so copy them across by hand if you want `scripts/test-parser.mjs` and
+`scripts/test-multifile.mjs` to run:
+
+| Script expects | What it is |
+|---|---|
+| `D:\project\template querry upload.xlsm` | a merged query export |
+| `D:\project\PFEP Simple Master Data_*.xlsb` | the PFEP master data |
+| `C:\Users\<you>\Downloads\query raw\*.xls` | the ~39 raw WMS files |
+| `C:\Users\<you>\Downloads\Query - *.xlsm` | dated merged exports |
+
+Edit the paths at the top of each script if your folders differ. Nothing else
+depends on these files — the app itself never reads from disk.
+
 ## Supabase
 
 Run these in the SQL Editor, in order. All are safe to re-run.
