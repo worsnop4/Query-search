@@ -12,14 +12,22 @@ export function notifyDataUpdated() {
 export function useLastUpdate(tableName = 'inventory') {
   const [info, setInfo] = useState(null)
   const [loading, setLoading] = useState(true)
+  // Reported separately from `info`: "we could not ask" and "there is no data"
+  // must not render as the same thing.
+  const [error, setError] = useState(null)
 
   const load = useCallback(async () => {
-    const { data, error } = await supabase
+    const { data, error: err } = await supabase
       .from('latest_upload')
       .select('table_name, row_count, uploaded_at, uploaded_email')
       .eq('table_name', tableName)
       .maybeSingle()
-    if (!error) setInfo(data ?? null)
+    if (err) {
+      setError(err)
+    } else {
+      setInfo(data ?? null)
+      setError(null)
+    }
     setLoading(false)
   }, [tableName])
 
@@ -30,7 +38,7 @@ export function useLastUpdate(tableName = 'inventory') {
     return () => window.removeEventListener(DATA_UPDATED_EVENT, handler)
   }, [load])
 
-  return { info, loading, refresh: load }
+  return { info, loading, error, refresh: load }
 }
 
 // Timestamps come back as UTC and are rendered in the viewer's local zone.

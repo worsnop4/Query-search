@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 
 const PAGE_SIZE = 100
@@ -44,6 +44,20 @@ export default function SearchPage() {
   const [error, setError] = useState(null)
   const [searched, setSearched] = useState(false)
 
+  // Enter in the textarea fires a search even while one is running (the
+  // button is disabled, the key handler is not), and changing the filter
+  // starts another. Whichever response lands last would win, painting rows,
+  // count and page from different queries. Only the newest request may write.
+  // reqRef gates the paged rows; searchRef gates the per-search name/missing
+  // lookups, which a filter or page change never touches.
+  const reqRef = useRef(0)
+  const searchRef = useRef(0)
+
+  // The part numbers the current search is for. A ref as well as state
+  // because changeFilter/reload need them in the same tick that runSearch
+  // sets them, before React has committed the state update.
+  const partsRef = useRef([])
+
   async function fetchPage(searchParts, filter, pageIndex) {
     const from = pageIndex * PAGE_SIZE
     let q = supabase
@@ -80,6 +94,9 @@ export default function SearchPage() {
       return
     }
 
+    const reqId = ++reqRef.current
+    const searchId = ++searchRef.current
+    partsRef.current = searchParts
     setLoading(true)
     setError(null)
     setSearched(true)
@@ -103,32 +120,39 @@ export default function SearchPage() {
       for (const r of nameRes.data ?? []) nameMap[r.part_number] = r.part_name
       const found = new Set((foundRes.data ?? []).map((r) => r.part_number))
 
+      if (searchRef.current === searchId) {
+        setNames(nameMap)
+        setMissing(searchParts.filter((p) => !found.has(p)))
+      }
+      if (reqRef.current !== reqId) return
       setRows(first.data)
       setTotal(first.count)
-      setNames(nameMap)
-      setMissing(searchParts.filter((p) => !found.has(p)))
     } catch (err) {
+      if (reqRef.current !== reqId) return
       setError(err.message ?? String(err))
       setRows([])
       setTotal(0)
       setMissing([])
     } finally {
-      setLoading(false)
+      if (reqRef.current === reqId) setLoading(false)
     }
   }
 
-  async function reload(filter, pageIndex) {
+  async function reload(filter, pageIndex, searchParts = partsRef.current) {
+    const reqId = ++reqRef.current
     setLoading(true)
     setError(null)
     try {
-      const { data, count } = await fetchPage(parts, filter, pageIndex)
+      const { data, count } = await fetchPage(searchParts, filter, pageIndex)
+      if (reqRef.current !== reqId) return
       setRows(data)
       setTotal(count)
       setPage(pageIndex)
     } catch (err) {
+      if (reqRef.current !== reqId) return
       setError(err.message ?? String(err))
     } finally {
-      setLoading(false)
+      if (reqRef.current === reqId) setLoading(false)
     }
   }
 
@@ -138,6 +162,12 @@ export default function SearchPage() {
   }
 
   function clearAll() {
+    // Abandon anything in flight; no later request will arrive to unset
+    // `loading` on its behalf, so do it here.
+    reqRef.current++
+    searchRef.current++
+    partsRef.current = []
+    setLoading(false)
     setInput('')
     setParts([])
     setRows([])

@@ -314,6 +314,26 @@ function toList(files) {
   return list.sort((a, b) => a.name.localeCompare(b.name))
 }
 
+// Progress for a batch, from the inner per-file progress.
+//
+// With many files, "file 7 of 39" is the useful measure. With ONE file - the
+// merged export, which is equally supported - file granularity would leave the
+// bar at 0% for the entire 195k-row parse, so report the parser's own row
+// counts instead. `p` is null for the call made before a file is opened.
+function fileProgress(list, i, f, p, rowsBefore) {
+  const single = list.length === 1
+  const done = p?.done ?? 0
+  return {
+    phase: p?.phase ?? 'parsing',
+    done: single ? done : i,
+    total: single ? (p?.total ?? 0) : list.length,
+    fileName: f.name,
+    fileIndex: i + 1,
+    fileCount: list.length,
+    rowsSoFar: rowsBefore + done,
+  }
+}
+
 export async function parseInventoryFiles(files, onProgress) {
   const list = toList(files)
   const rows = []
@@ -323,19 +343,14 @@ export async function parseInventoryFiles(files, onProgress) {
 
   for (let i = 0; i < list.length; i++) {
     const f = list[i]
-    onProgress?.({
-      phase: 'parsing',
-      done: i,
-      total: list.length,
-      fileName: f.name,
-      fileIndex: i + 1,
-      fileCount: list.length,
-      rowsSoFar: rows.length,
-    })
+    const rowsBefore = rows.length
+    onProgress?.(fileProgress(list, i, f, null, rowsBefore))
 
     let res
     try {
-      res = await parseInventory(f)
+      res = await parseInventory(f, (p) =>
+        onProgress?.(fileProgress(list, i, f, p, rowsBefore))
+      )
     } catch (err) {
       throw new Error(`${f.name}: ${err.message}`)
     }
@@ -382,19 +397,14 @@ export async function parseMasterDataFiles(files, onProgress) {
 
   for (let i = 0; i < list.length; i++) {
     const f = list[i]
-    onProgress?.({
-      phase: 'parsing',
-      done: i,
-      total: list.length,
-      fileName: f.name,
-      fileIndex: i + 1,
-      fileCount: list.length,
-      rowsSoFar: byPart.size,
-    })
+    const rowsBefore = byPart.size
+    onProgress?.(fileProgress(list, i, f, null, rowsBefore))
 
     let res
     try {
-      res = await parseMasterData(f)
+      res = await parseMasterData(f, (p) =>
+        onProgress?.(fileProgress(list, i, f, p, rowsBefore))
+      )
     } catch (err) {
       throw new Error(`${f.name}: ${err.message}`)
     }

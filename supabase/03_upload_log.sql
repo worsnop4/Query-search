@@ -32,6 +32,15 @@ create policy upload_log_public_read
 
 -- ============================================================================
 -- Swap functions, now logging. Bodies are otherwise unchanged from setup.sql.
+--
+-- statement_timeout: Supabase caps the `authenticated` role at 8 seconds by
+-- default. These functions truncate and re-insert the whole live table
+-- (~195,000 rows for inventory, computing calc_area() per row and maintaining
+-- three indexes), which takes far longer - without the override the swap is
+-- cancelled and rolled back every time, so no upload can ever complete. If the
+-- platform still cancels it, raise the role-level limit too:
+--   alter role authenticated set statement_timeout = '5min';
+--   notify pgrst, 'reload config';
 -- ============================================================================
 
 create or replace function public.swap_inventory(expected_rows bigint)
@@ -39,6 +48,7 @@ returns bigint
 language plpgsql
 security definer
 set search_path = public, pg_temp
+set statement_timeout = '5min'
 as $$
 declare
   staged bigint;
@@ -84,6 +94,7 @@ returns bigint
 language plpgsql
 security definer
 set search_path = public, pg_temp
+set statement_timeout = '5min'
 as $$
 declare
   staged bigint;

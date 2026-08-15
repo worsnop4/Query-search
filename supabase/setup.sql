@@ -2,6 +2,13 @@
 -- Inventory Search Website - Supabase setup
 -- Run this whole file in: Supabase Dashboard -> SQL Editor -> New query -> Run
 -- It is safe to run more than once (idempotent).
+--
+-- BUT if you have already run 02_search_helpers.sql / 03_upload_log.sql, run
+-- them AGAIN afterwards. This file re-creates objects those two later replace:
+-- the search_results view (03's version has is_case_opened) and the swap
+-- functions (03's versions write to upload_log, which is what feeds the
+-- "Last update" shown in the header). Re-running this file alone silently
+-- reverts both.
 -- ============================================================================
 
 
@@ -163,11 +170,21 @@ $$;
 
 -- Called by the app after the last chunk. Pass the number of rows the
 -- parser produced; the function refuses to swap unless staging matches.
+--
+-- statement_timeout: Supabase caps the `authenticated` role at 8 seconds by
+-- default. This function truncates and re-inserts ~195,000 rows, computing
+-- calc_area() per row and maintaining three indexes, which takes far longer
+-- than that - without the override the swap is cancelled and rolled back every
+-- time, and no upload can ever complete. If the platform still cancels it,
+-- raise the role-level limit too:
+--   alter role authenticated set statement_timeout = '5min';
+--   notify pgrst, 'reload config';
 create or replace function public.swap_inventory(expected_rows bigint)
 returns bigint
 language plpgsql
 security definer
 set search_path = public, pg_temp
+set statement_timeout = '5min'
 as $$
 declare
   staged bigint;
@@ -209,6 +226,7 @@ returns bigint
 language plpgsql
 security definer
 set search_path = public, pg_temp
+set statement_timeout = '5min'
 as $$
 declare
   staged bigint;
@@ -314,7 +332,14 @@ group by i.part_number, m.part_name, m.dloc;
 
 
 -- Search: inventory joined to master data, columns in display order.
-create or replace view public.search_results as
+-- DROP first, not CREATE OR REPLACE: 02_search_helpers.sql redefines this view
+-- with the columns in a different order, and CREATE OR REPLACE can only append
+-- columns - it cannot rename or reorder them. Without the drop, re-running
+-- this file after 02 fails with "cannot change name of view column", and the
+-- SQL Editor rolls the whole script back.
+drop view if exists public.search_results;
+
+create view public.search_results as
 select
   i.part_number,
   m.part_name,
