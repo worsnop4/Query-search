@@ -96,8 +96,10 @@ data), so copy them across by hand if you want `scripts/test-parser.mjs` and
 | `C:\Users\<you>\Downloads\query raw\*.xls` | the ~39 raw WMS files |
 | `C:\Users\<you>\Downloads\Query - *.xlsm` | dated merged exports |
 
-Edit the paths at the top of each script if your folders differ. Nothing else
-depends on these files — the app itself never reads from disk.
+Those are the fallback paths. If your folders differ, pass the path as an
+argument or set `$QUERY_DATA_DIR` — see [Scripts](#scripts) below; there is no
+longer anything to edit inside the scripts. Nothing else depends on these
+files — the app itself never reads from disk.
 
 ## Supabase
 
@@ -163,9 +165,9 @@ refuses a file that is missing a required column. See the comment at the top of
 ### Uploads are atomic
 
 Rows are inserted into a staging table first. Only once every row has arrived
-does `swap_inventory(n)` verify the count and replace the live table in a
-single transaction. A failed, cancelled or abandoned upload leaves the live
-data untouched, and searches never see a half-empty table.
+does `swap_inventory(n, session_id)` verify the count and replace the live
+table in a single transaction. A failed, cancelled or abandoned upload leaves
+the live data untouched, and searches never see a half-empty table.
 
 ### Zone Type → Area
 

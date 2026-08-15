@@ -17,6 +17,7 @@ real data and is not obvious from the code.
 | Query upload — 39 raw `.xls` files at once | **Working end to end** (194,278 rows, ~4 min) |
 | Master Data upload (`.xlsb` PFEP) | Built, shares the same UI — **never run by the user** |
 | Upload log / "Last update" header | Working |
+| Admin presence + exclusive upload claim | **Working, verified with two real accounts** |
 | Vercel deploy | Live, auto-deploys from `main` |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Not started** — has open questions, see below |
@@ -44,8 +45,23 @@ locally — see "Reading the source files" below.
 
 Rows are inserted into `inventory_staging` / `master_data_staging` in chunks of
 2,000. Only when every chunk has landed does the app call
-`swap_inventory(n)` / `swap_master_data(n)`, which verifies the row count
-matches and replaces the live table **in a single transaction**.
+`swap_inventory(n, session_id)` / `swap_master_data(n, session_id)`, which
+verifies the row count matches and replaces the live table **in a single
+transaction**.
+
+Both take a session id because the upload is exclusive per target — see below.
+The one-argument signatures no longer exist; `05_admin_presence.sql` dropped
+them deliberately, so a stale bundle cannot call an unprotected version.
+
+Two things make this work at all, both easy to undo by accident:
+
+- `set statement_timeout = '5min'` on the swap functions. Supabase caps the
+  `authenticated` role at 8s, which a 195k-row swap blows through every time.
+  Without it no upload can ever complete.
+- The retry in `upload.js` re-checks the staging row count before re-sending a
+  chunk. A request that failed *after* the server committed it would otherwise
+  be inserted twice, and the exact row-count check would then reject the whole
+  upload at the very end.
 
 Consequences that matter: a failed, cancelled or abandoned upload leaves live
 data completely untouched; searches never see a half-filled table; and nothing
@@ -53,6 +69,32 @@ writes to the live tables directly — the swap functions are `SECURITY DEFINER`
 and are the only path in.
 
 Never "simplify" this to a delete-then-insert.
+
+### One admin uploads a table at a time
+
+`05_admin_presence.sql` adds `admin_session`, one row per browser **tab**
+(not per user — a second idle tab's heartbeat would otherwise overwrite the
+uploading tab's status and drop its claim).
+
+Pressing Replace calls `claim_upload(session_id, target)`. `reset_*_staging()`
+and `swap_*()` then refuse to run without a live claim, so the exclusivity
+holds even against someone calling PostgREST directly with a valid JWT. It is
+per target: Query and Master Data can upload concurrently, since they share no
+staging table.
+
+A claim is live only while its heartbeat is fresh (90s, beaten every 30s), so a
+tab that dies mid-upload frees the table by itself. There is no lock to clear
+by hand — and `admin_release()` deliberately will not delete a row that is
+mid-upload, because chunks may still be arriving.
+
+The `active_admins` view is readable by `anon` so the login page can show who
+is in. It exposes the display name, status and timestamps only. Names come from
+`email_display_name(auth.jwt() ->> 'email')` — derived server-side, never sent
+by the client, so they cannot be forged, and the domain is stripped because
+that page is reachable by anyone with the URL.
+
+Test it with `scripts/test-presence.mjs`, which needs two real admin accounts
+and asserts the enforcement from outside the UI.
 
 ### Columns are mapped by HEADER NAME, never by position
 
@@ -180,11 +222,21 @@ Run these before claiming anything works:
 ```powershell
 $env:Path = "$env:Path;$env:LOCALAPPDATA\nodejs"
 
-node scripts/test-parser.mjs        # parser vs 6 real files, all layouts
+node scripts/test-parser.mjs        # parser vs the real files, all layouts
 node scripts/test-multifile.mjs     # 39 raw files parsed as one upload
 node --env-file=.env scripts/smoke-test.mjs   # search queries vs live Supabase
 npm run build
 ```
+
+The workbook scripts take a path, or read `$QUERY_DATA_DIR`, falling back to
+the Windows paths of the machine the data lives on. **A run that finds no files
+exits 1.** It used to skip them and still print `ALL CHECKS PASSED`, so away
+from that one machine a broken parser was indistinguishable from a working one
+— do not reintroduce a silent skip.
+
+`scripts/test-presence.mjs` needs two admin accounts, passed as
+`ADMIN_A_EMAIL` / `ADMIN_A_PASSWORD` / `ADMIN_B_EMAIL` / `ADMIN_B_PASSWORD`.
+It never calls `swap_*()`, so live data is safe.
 
 `scripts/inspect-raw.mjs` and `scripts/dupcheck.mjs` are diagnostic, for when a
 new file shape appears.
