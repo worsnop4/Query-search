@@ -18,6 +18,8 @@ real data and is not obvious from the code.
 | Master Data upload (`.xlsb` PFEP) | Built, shares the same UI — **never run by the user** |
 | Upload log / "Last update" header | Working |
 | Admin presence + exclusive upload claim | **Working, verified with two real accounts** |
+| Search filter by zone type | **Working** — needs `02_search_helpers.sql` re-run for the `zone_types` view |
+| Admin CSV export of all inventory | **Working, verified** — 194,377 rows, 26 MB, 17s |
 | Vercel deploy | Live, auto-deploys from `main` |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Not started** — has open questions, see below |
@@ -95,6 +97,22 @@ that page is reachable by anyone with the URL.
 
 Test it with `scripts/test-presence.mjs`, which needs two real admin accounts
 and asserts the enforcement from outside the UI.
+
+### PostgREST returns at most 1,000 rows per request
+
+Measured on this project, not a guess: `.limit(5000)` and `.range(0, 4999)`
+both come back with exactly 1,000 rows and no error. Anything that reads a
+large slice of `inventory` must paginate — the full CSV export is ~195
+requests, five at a time, about 17 seconds for 194k rows.
+
+Always `.order('id')` when paging. Without a stable sort Postgres may hand back
+the same row on two pages and skip another, producing a file that looks
+complete and is not. `scripts/test-export.mjs` asserts exactly this.
+
+An export must not run during an upload: `swap_inventory()` truncates and
+re-inserts, so every id changes mid-read. The download button is disabled while
+an admin holds the inventory claim, and the row count is compared before and
+after as a backstop.
 
 ### Columns are mapped by HEADER NAME, never by position
 

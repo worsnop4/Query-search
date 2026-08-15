@@ -147,6 +147,37 @@ timestamps — never the email or user id. Be aware this does publish valid
 email local parts on a page anyone with the URL can reach; that is an accepted
 trade-off for an internal site, and the reason the domain is left off.
 
+## Searching and exporting
+
+The search page filters by **Case opened** and by **Zone type**, and both apply
+together. The zone list comes from the `zone_types` view rather than a list
+baked into the page, so a zone type the WMS starts emitting tomorrow appears on
+its own instead of silently having its rows become unfilterable. Zone Type is
+shown as a column too — a filter whose effect you cannot see in the results is
+hard to trust.
+
+No index on `zone_type`, and none needed: every search narrows by
+`part_number` first, so the zone filter only ever touches a few thousand rows.
+
+The admin page can **download the whole inventory as one CSV** — the ten
+columns exactly as the parser imported them, with no part names and none of
+the columns Postgres computes during a swap. Roughly 26 MB and about 20
+seconds for 194k rows.
+
+The download takes about 195 requests, because **PostgREST caps every response
+at 1,000 rows** on this project; `.limit(5000)` and `.range(0, 4999)` both come
+back with 1,000. Pages are fetched five at a time and ordered by `id`, which is
+what stops a row appearing on two pages while another goes missing.
+
+It is blocked while an admin holds the inventory upload claim, and the row
+count is compared before and after: `swap_inventory()` truncates and re-inserts,
+so an upload landing mid-export would otherwise hand over a file that looks
+complete and is not.
+
+Putting the button on the admin page is for discoverability, not security —
+`inventory` is readable by `anon`, which is what makes the public search work,
+so anyone can already pull the same data through the API.
+
 ## How the data works
 
 Two source files, uploaded separately and never touching each other's table:
@@ -188,6 +219,7 @@ re-upload needed.
 | `node scripts/dupcheck.mjs [folder]` | Compares the duplicate rate in a merged workbook against a single raw file |
 | `node --env-file=.env scripts/smoke-test.mjs` | Runs the search page's queries against live Supabase |
 | `node --env-file=.env scripts/test-presence.mjs` | Signs in as two admins and proves one blocks the other, including via direct API calls |
+| `node --env-file=.env scripts/test-export.mjs` | CSV quoting rules, then fetches all 194k rows and checks none repeat or go missing (`--save` keeps the file) |
 | `scripts/export-csv.ps1` | Converts the workbooks to CSV for manual Supabase import (needs Excel; only used for the initial load) |
 
 The four workbook scripts take a path, or read `$QUERY_DATA_DIR`; with neither

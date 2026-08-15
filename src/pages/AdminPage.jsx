@@ -8,6 +8,7 @@ import {
   relativeTime,
 } from '../lib/useLastUpdate'
 import { useAdminPresence, listNames } from '../lib/useAdminPresence'
+import { exportInventoryCsv, exportFileName, saveBlob } from '../lib/export'
 
 const nf = new Intl.NumberFormat()
 
@@ -478,6 +479,143 @@ function Roster({ others }) {
   )
 }
 
+function DownloadCard({ blockedBy }) {
+  const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState(null)
+  const [error, setError] = useState(null)
+  const [result, setResult] = useState(null)
+  const cancelRef = useRef(false)
+
+  async function run() {
+    setBusy(true)
+    setError(null)
+    setResult(null)
+    cancelRef.current = false
+
+    const startedAt = Date.now()
+    try {
+      const { blob, rows, changed } = await exportInventoryCsv({
+        onProgress: setProgress,
+        shouldCancel: () => cancelRef.current,
+      })
+      const name = exportFileName()
+      saveBlob(blob, name)
+      setResult({
+        rows,
+        name,
+        mb: blob.size / 1048576,
+        seconds: Math.round((Date.now() - startedAt) / 1000),
+        changed,
+      })
+    } catch (err) {
+      setError(err.message ?? String(err))
+    } finally {
+      setBusy(false)
+      setProgress(null)
+    }
+  }
+
+  const pct =
+    progress && progress.total > 0
+      ? Math.round((progress.done / progress.total) * 100)
+      : null
+
+  return (
+    <section className="card">
+      <header className="cardhead">
+        <div>
+          <h2>Download Query data</h2>
+          <p className="muted small">Every inventory row as one CSV file</p>
+        </div>
+        <CardLastUpdate table="inventory" />
+      </header>
+
+      <p className="hint">
+        The ten columns exactly as they came from the WMS &mdash; no part names,
+        and none of the columns the database computes during an upload.
+      </p>
+
+      {blockedBy && (
+        <div className="locked">
+          <strong>{blockedBy} is updating Query right now.</strong> Downloading
+          during an upload would produce a file with rows repeated and rows
+          missing, so this waits until they finish.
+        </div>
+      )}
+
+      {progress && (
+        <div className="progress">
+          <div className="progresshead">
+            <span>Downloading...</span>
+            <span className="mono">
+              {nf.format(progress.done)} / {nf.format(progress.total)}
+              {pct !== null && ` (${pct}%)`}
+            </span>
+          </div>
+          <div className="bar">
+            <div
+              className={`fill${pct === null ? ' indeterminate' : ''}`}
+              style={pct === null ? undefined : { width: `${pct}%` }}
+            />
+          </div>
+          <p className="muted small progressnote">
+            The database returns at most 1,000 rows per request, so this takes
+            about 195 of them. Keep this tab open.
+          </p>
+          <button
+            type="button"
+            className="ghost small"
+            onClick={() => {
+              cancelRef.current = true
+            }}
+          >
+            Cancel download
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <div className="error">
+          <strong>Download failed.</strong> {error}
+        </div>
+      )}
+
+      {result && (
+        <>
+          <div className="success">
+            <strong>Saved {result.name}.</strong>{' '}
+            {nf.format(result.rows)} rows, {result.mb.toFixed(1)} MB, in{' '}
+            {formatDuration(result.seconds)}.
+          </div>
+          {result.changed && (
+            <div className="warn">
+              <strong>The table changed while this was downloading.</strong> An
+              upload finished mid-export, so this file may repeat some rows and
+              miss others. Download it again.
+            </div>
+          )}
+        </>
+      )}
+
+      <div className="buttons">
+        <button type="button" onClick={run} disabled={busy || !!blockedBy}>
+          {busy
+            ? 'Downloading...'
+            : blockedBy
+              ? `Locked - ${blockedBy} is updating this`
+              : 'Download all Query data (CSV)'}
+        </button>
+      </div>
+
+      <p className="muted small">
+        Opening a CSV by double-clicking can make Excel turn long part numbers
+        into scientific notation. Data &rarr; From Text/CSV, with the part
+        number column set to Text, avoids it.
+      </p>
+    </section>
+  )
+}
+
 export default function AdminPage() {
   const { sessionId, others, uploaderOf, refresh } = useAdminPresence(true)
 
@@ -500,6 +638,8 @@ export default function AdminPage() {
           onFinished={refresh}
         />
       ))}
+
+      <DownloadCard blockedBy={uploaderOf('inventory')?.display_name ?? null} />
     </div>
   )
 }
