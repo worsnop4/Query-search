@@ -202,8 +202,26 @@ August 2026:
 - **7,172 master parts have no inventory rows** — relevant to the Breakdown
   open question below.
 - **Duplicate rows by (part+case+location) run at 6–8%** — inside a single raw
-  file as well as in merged output. This is normal in this data, not a merge
-  artifact. Do not de-duplicate inventory.
+  file as well as in merged output, so not a merge artifact and not something
+  the parser introduced.
+
+  What they are, established 15 Aug 2026: **data-entry mistakes made by whoever
+  updates the WMS.** The user identified them and is fixing them at source; they
+  are not a warehouse concept the app needs to model. Examples at the time:
+  part `10625728` had 15 byte-identical rows for one case (qty 6 each, same
+  location, same timestamps, consecutive ids); `10218431` had one case repeated
+  17 times. Of the repeating groups sampled, 7 in 10 were identical in every
+  column and 3 in 10 differed only in the timestamps — **none** differed in
+  quantity, location, case or zone.
+
+  **Do not de-duplicate inventory, and do not aggregate it away in the UI.** The
+  user chose to fix the source rather than hide it downstream, so the search
+  page showing every exported row is deliberate: it surfaces the mistake instead
+  of masking it. How results should ultimately be displayed (per row vs per
+  case) is **deferred, not decided** — do not implement grouping unprompted.
+
+  Worth re-measuring after a WMS-side fix has landed: if the rate drops, the
+  cleanup is working; if it does not, the diagnosis needs revisiting.
 - **`is_case_opened`** is exactly `Yes` / `No`, no blanks.
 - **`status`** is `Available` on every row — useless as a filter.
 - **Rows per part**: median 6, 99th percentile 183, max 4,205 (part `26184917`).
