@@ -93,9 +93,52 @@ const { count: contains } = await supabase
 console.log(`   exact 23588931 -> ${exact} rows; contains -> ${contains} rows`)
 check('exact is not wider than contains', exact <= contains, `${exact} vs ${contains}`)
 
-console.log(`\n   partial search timing: ${r1.ms}ms and ${r2.ms}ms`)
-if (r1.ms > 300 || r2.ms > 300) {
-  console.log('   NOTE: still slow - has supabase/06_partial_search.sql been run?')
+// Is the trigram index actually in use?
+//
+// An absolute millisecond threshold is useless here: the round trip to
+// Supabase is ~190ms from this office before Postgres does any work, so a
+// perfectly indexed search still "takes 200ms". Measure the floor and compare
+// against it instead.
+//
+// The control is a 2-character pattern. Trigrams are three characters, so
+// `%00%` CANNOT use the index and must scan the table - if the 4-character
+// searches are close to the floor while the 2-character one is well above it,
+// the index is doing its job.
+async function timeOf(fn, runs = 5) {
+  const times = []
+  for (let i = 0; i < runs; i++) {
+    const t = Date.now()
+    await fn()
+    times.push(Date.now() - t)
+  }
+  return Math.min(...times)
+}
+
+console.log('\n--- is the trigram index in use? ---')
+
+const floor = await timeOf(() =>
+  supabase.from('inventory').select('part_number').eq('part_number', '23588931').limit(1)
+)
+const indexed = await timeOf(() =>
+  supabase.from('inventory').select('part_number', { count: 'exact' })
+    .ilike('part_number', '%9242%').range(0, 99)
+)
+const scanned = await timeOf(() =>
+  supabase.from('inventory').select('part_number', { count: 'exact' })
+    .ilike('part_number', '%00%').range(0, 99)
+)
+
+console.log(`   network floor (exact, 1 row) : ${floor}ms`)
+console.log(`   4-char partial (can index)   : ${indexed}ms`)
+console.log(`   2-char partial (cannot)      : ${scanned}ms`)
+
+check('partial search costs little over the network floor', indexed - floor < 250,
+      `${indexed - floor}ms above floor`)
+check('the un-indexable control is measurably slower', scanned > indexed,
+      `${scanned}ms vs ${indexed}ms`)
+
+if (indexed - floor >= 250) {
+  console.log('\n   NOTE: has supabase/06_partial_search.sql been run?')
 }
 
 report()
