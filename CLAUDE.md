@@ -19,7 +19,7 @@ real data and is not obvious from the code.
 | Upload log / "Last update" header | Working |
 | Admin presence + exclusive upload claim | **Working, verified with two real accounts** |
 | Search filter by zone type | **Working** — needs `02_search_helpers.sql` re-run for the `zone_types` view |
-| Admin CSV export of all inventory | **Working, verified** — 194,377 rows, 26 MB, 17s |
+| Admin export of all inventory | **Working, verified** — zipped CSV, ~1.8 MB from ~24 MB |
 | Copy search results to clipboard | **Working, verified** — TSV, all matching rows not just the page |
 | WhatsApp "notify group" after an upload | **Working** — pre-fills the message; the group is picked by hand, see below |
 | Partial search by last 4 digits | **Working** — needs `06_partial_search.sql` for the trigram index, or it is ~0.8s per search |
@@ -127,6 +127,46 @@ An export must not run during an upload: `swap_inventory()` truncates and
 re-inserts, so every id changes mid-read. The download button is disabled while
 an admin holds the inventory claim, and the row count is compared before and
 after as a backstop.
+
+### The export is a zipped CSV, and Excel formats were measured, not assumed
+
+Asked whether `.xlsb` would shrink the 24 MB export. Measured on a real
+194,731-row export:
+
+```
+CSV        24.1 MB     0.2s
+CSV.zip     1.8 MB      22s     <- 7.6% of the CSV
+XLSX       23.9 MB     150s
+XLSB          did not finish in over 7 minutes, twice
+```
+
+`.xlsx` is itself a zip container, but its XML is verbose enough that
+compressing it lands back where the plain CSV started — 0.2 MB saved for 150
+seconds. `.xlsb` never completed at all in Node with a 4 GB heap, and this runs
+in a **browser tab**. Zipping the CSV is 13x smaller and `.zip` opens natively
+on Windows Explorer, so the CSV inside opens in Excel as usual.
+
+Compression is level 6, not 9: on this data 9 saves under 2% for roughly twice
+the time, spent on the user's main thread.
+
+`src/lib/exportFormat.js` holds the columns, the zip call and the file naming,
+and imports nothing from Supabase — `supabase.js` reads `import.meta.env`,
+which only exists under Vite, so anything importing it cannot be tested in
+plain Node. That is the same reason `csv.js` is separate. `export.js` does the
+paging and re-exports the rest, so callers still import from one place.
+
+`scripts/test-export-zip.mjs` covers the round trip. Two traps it hit while
+being written, both of which made a correct implementation look broken:
+
+- **A three-row fixture gets BIGGER when zipped** (462 bytes from 438) — zip
+  headers cost ~100 bytes and there is nothing to compress. Size is asserted on
+  a 20,000-row payload instead, where it lands at ~3%.
+- **`strFromU8` strips the BOM.** It decodes via `TextDecoder`, which drops a
+  leading U+FEFF unless told not to, so checking the decoded string reported
+  the BOM missing when it was present. Check `EF BB BF` as raw bytes.
+
+The BOM belongs **inside** the zip entry, not on the archive — it is what makes
+Excel read the extracted file as UTF-8.
 
 ### Partial search: contains, not ends-with
 

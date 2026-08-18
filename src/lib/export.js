@@ -1,5 +1,11 @@
 import { supabase } from './supabase'
 import { csvRow } from './csv'
+import { EXPORT_COLUMNS, zipCsv, exportCsvName } from './exportFormat'
+
+// Re-exported so callers keep importing everything about the export from one
+// place; the definitions live in exportFormat.js because that file can be
+// tested in Node, and this one cannot.
+export { EXPORT_COLUMNS, exportCsvName, exportFileName } from './exportFormat'
 
 // ---------------------------------------------------------------------------
 // Exporting the whole inventory table
@@ -18,19 +24,6 @@ import { csvRow } from './csv'
 
 const PAGE = 1000
 const CONCURRENCY = 5
-
-export const EXPORT_COLUMNS = [
-  'part_number',
-  'supplier_code',
-  'case_no',
-  'location',
-  'zone_type',
-  'quantity',
-  'status',
-  'is_case_opened',
-  'inbound_time',
-  'first_inbound_time',
-]
 
 const SELECT = EXPORT_COLUMNS.join(', ')
 
@@ -57,11 +50,11 @@ export async function countInventory() {
 }
 
 /**
- * Fetch every row and build a CSV Blob.
+ * Fetch every row and build a zipped CSV Blob.
  *
- * Returns { blob, rows, changed } - `changed` is true when the table's row
- * count moved while we were reading, which means an upload swapped the table
- * underneath us and the file cannot be trusted.
+ * Returns { blob, rows, changed, csvBytes, zipBytes } - `changed` is true when
+ * the table's row count moved while we were reading, which means an upload
+ * swapped the table underneath us and the file cannot be trusted.
  */
 export async function exportInventoryCsv({ onProgress, shouldCancel } = {}) {
   const total = await countInventory()
@@ -102,22 +95,27 @@ export async function exportInventoryCsv({ onProgress, shouldCancel } = {}) {
   // looks complete.
   const after = await countInventory()
 
+  // The BOM is what makes Excel read the extracted file as UTF-8 on a double
+  // click. It has to be inside the zip entry, not on the zip itself.
+  //
+  // Via a Blob rather than joining into one string: the parts stay separate
+  // until arrayBuffer() walks them, so a 24 MB file never has to exist as a
+  // single JavaScript value.
+  const csvBlob = new Blob(['﻿', ...parts], { type: 'text/csv;charset=utf-8' })
+  const csvBytes = new Uint8Array(await csvBlob.arrayBuffer())
+
+  onProgress?.({ phase: 'compressing', done: total, total })
+  const zipped = await zipCsv(exportCsvName(), csvBytes)
+
   onProgress?.({ phase: 'done', done: total, total })
 
   return {
-    // The BOM is what makes Excel read the file as UTF-8 on a double click.
-    blob: new Blob(['﻿', ...parts], { type: 'text/csv;charset=utf-8' }),
+    blob: new Blob([zipped], { type: 'application/zip' }),
     rows: done,
     changed: after !== total,
+    csvBytes: csvBytes.length,
+    zipBytes: zipped.length,
   }
-}
-
-export function exportFileName(now = new Date()) {
-  const p = (n) => String(n).padStart(2, '0')
-  return (
-    `inventory-${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}` +
-    `-${p(now.getHours())}${p(now.getMinutes())}.csv`
-  )
 }
 
 /** Hand the blob to the browser as a download. */

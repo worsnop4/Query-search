@@ -22,6 +22,8 @@ const PHASE_LABEL = {
   clearing: 'Preparing database...',
   uploading: 'Uploading to database...',
   swapping: 'Verifying and switching over...',
+  downloading: 'Downloading rows...',
+  compressing: 'Compressing...',
   done: 'Done',
 }
 
@@ -557,7 +559,7 @@ function DownloadCard({ blockedBy }) {
 
     const startedAt = Date.now()
     try {
-      const { blob, rows, changed } = await exportInventoryCsv({
+      const { blob, rows, changed, csvBytes, zipBytes } = await exportInventoryCsv({
         onProgress: setProgress,
         shouldCancel: () => cancelRef.current,
       })
@@ -567,6 +569,8 @@ function DownloadCard({ blockedBy }) {
         rows,
         name,
         mb: blob.size / 1048576,
+        csvMb: csvBytes / 1048576,
+        savedPct: csvBytes > 0 ? 100 - (100 * zipBytes) / csvBytes : 0,
         seconds: Math.round((Date.now() - startedAt) / 1000),
         changed,
       })
@@ -588,7 +592,7 @@ function DownloadCard({ blockedBy }) {
       <header className="cardhead">
         <div>
           <h2>Download Query data</h2>
-          <p className="muted small">Every inventory row as one CSV file</p>
+          <p className="muted small">Every inventory row as one zipped CSV</p>
         </div>
         <CardLastUpdate table="inventory" />
       </header>
@@ -647,8 +651,14 @@ function DownloadCard({ blockedBy }) {
         <>
           <div className="success">
             <strong>Saved {result.name}.</strong>{' '}
-            {nf.format(result.rows)} rows, {result.mb.toFixed(1)} MB, in{' '}
+            {nf.format(result.rows)} rows, <strong>{result.mb.toFixed(1)} MB</strong>{' '}
+            zipped from {result.csvMb.toFixed(1)} MB &mdash;{' '}
+            {result.savedPct.toFixed(0)}% smaller &mdash; in{' '}
             {formatDuration(result.seconds)}.
+            <p className="muted small">
+              Double-click the .zip to open it; the CSV is inside. Windows
+              handles .zip on its own, no extra program needed.
+            </p>
           </div>
           {result.changed && (
             <div className="warn">
@@ -666,14 +676,16 @@ function DownloadCard({ blockedBy }) {
             ? 'Downloading...'
             : blockedBy
               ? `Locked - ${blockedBy} is updating this`
-              : 'Download all Query data (CSV)'}
+              : 'Download all Query data (zipped CSV)'}
         </button>
       </div>
 
       <p className="muted small">
-        Opening a CSV by double-clicking can make Excel turn long part numbers
-        into scientific notation. Data &rarr; From Text/CSV, with the part
-        number column set to Text, avoids it.
+        The file is a .zip about a tenth the size of the CSV inside it.
+        Double-click to open it &mdash; Windows reads .zip without any extra
+        program. Note that opening the CSV by double-clicking can make Excel
+        turn long part numbers into scientific notation; Data &rarr; From
+        Text/CSV, with the part number column set to Text, avoids that.
       </p>
     </section>
   )
