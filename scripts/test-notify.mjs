@@ -1,74 +1,66 @@
 // Checks the WhatsApp notification message and its URL encoding.
 //
 //   node scripts/test-notify.mjs
-import { buildUpdateMessage, whatsappUrl, siteUrl } from '../src/lib/notify.js'
+import { buildUpdateMessage, whatsappUrl, SITE_DOMAIN } from '../src/lib/notify.js'
 import { checker } from './lib.mjs'
 
 const { check, report } = checker()
+
+// 09:45 UTC. The formatter is pinned to en-GB and 24h, but NOT to a timezone -
+// the stamp is meant to read in the sender's local time, so this test asserts
+// the shape rather than a fixed hour.
 const WHEN = new Date('2026-08-15T09:45:00Z')
 
 console.log('--- message ---')
 
-const msg = buildUpdateMessage({
-  label: 'Query data',
-  rows: 194278,
-  files: 39,
-  seconds: 239,
-  who: 'admin1',
-  when: WHEN,
-  url: 'https://query-search.vercel.app',
-})
+const msg = buildUpdateMessage({ label: 'Query', who: 'admin1', when: WHEN })
 console.log(msg.split('\n').map((l) => `   | ${l}`).join('\n'))
 console.log('')
 
-check('names the dataset', msg.startsWith('Query data updated'), msg.split('\n')[0])
-check('row count is grouped', msg.includes('194,278 rows now live'))
-check('file count included', msg.includes('from 39 files'))
-check('uploader named', msg.includes('admin1'))
-check('duration in minutes and seconds', msg.includes('3m 59s'), '239s')
-check('site link present', msg.includes('https://query-search.vercel.app'))
+const lines = msg.split('\n')
+check('exactly three lines', lines.length === 3, String(lines.length))
+check('first line names the dataset', lines[0] === 'Query updated', lines[0])
+check('second line is who and when', /^admin1 · \d{2} \w{3} \d{4}, \d{2}:\d{2}$/.test(lines[1]), lines[1])
+check('third line is the domain', lines[2] === SITE_DOMAIN, lines[2])
+check('no blank lines', !lines.includes(''), JSON.stringify(lines))
 
-// Single file: the "from N files" line would read oddly as "from 1 files".
-const single = buildUpdateMessage({
-  label: 'Master Data', rows: 18630, files: 1, seconds: 9, who: 'dian.ayu', when: WHEN,
-  url: 'https://query-search.vercel.app',
-})
-check('no file line for a single file', !single.includes('from 1 files'))
-check('seconds under a minute stay plain', single.includes('took 9s'), '9s')
-check('label follows the target', single.startsWith('Master Data updated'))
+// Day-first and 24-hour regardless of the machine's locale.
+check('day comes before the month', /^\d{2} \w{3}/.test(lines[1].split('· ')[1]), lines[1])
+check('24-hour clock, no AM/PM', !/[AP]M/i.test(lines[1]), lines[1])
 
-// Optional pieces really are optional.
-const bare = buildUpdateMessage({ label: 'Query data', rows: 5, when: WHEN })
-check('no link line without a url', !bare.toLowerCase().includes('search here'))
-check('no duration line at zero seconds', !bare.includes('took'))
-check('still reports the rows', bare.includes('5 rows now live'))
+const master = buildUpdateMessage({ label: 'Master Data', who: 'dian.ayu', when: WHEN })
+check('label follows the target', master.startsWith('Master Data updated'), master.split('\n')[0])
+check('uploader name follows the signed-in admin', master.includes('dian.ayu'), master.split('\n')[1])
 
-console.log('\n--- url encoding ---')
+// Signed in but no email on the session: the line should collapse, not read " · ".
+const anon = buildUpdateMessage({ label: 'Query', who: null, when: WHEN })
+check('no dangling separator without a name', !anon.includes('· ') || !anon.split('\n')[1].startsWith('·'),
+      anon.split('\n')[1])
+check('still three lines without a name', anon.split('\n').length === 3, String(anon.split('\n').length))
+
+check('domain is the public one, not vercel', SITE_DOMAIN === 'querry.online', SITE_DOMAIN)
+
+console.log('--- url encoding ---')
 
 const url = whatsappUrl(msg)
 check('points at WhatsApp Web', url.startsWith('https://web.whatsapp.com/send?text='), url.slice(0, 42))
 check('no raw newlines in the url', !/[\n\r]/.test(url))
 check('no raw spaces in the url', !url.slice(url.indexOf('?')).includes(' '))
 check('newlines encoded as %0A', url.includes('%0A'))
+check('the middle dot survives', decodeURIComponent(url.split('?text=')[1]).includes('·'))
 
 const decoded = decodeURIComponent(url.split('?text=')[1])
-check('decodes back to exactly the message', decoded === msg,
-      decoded === msg ? 'identical' : 'DIFFERS')
+check('decodes back to exactly the message', decoded === msg, decoded === msg ? 'identical' : 'DIFFERS')
 
-// A stray & or # in a message would truncate the query string if unencoded.
-const hostile = buildUpdateMessage({
-  label: 'Query data', rows: 1, who: 'a&b#c', when: WHEN, url: 'https://x.test/?a=1&b=2',
-})
-const hostileUrl = whatsappUrl(hostile)
-const hostileBack = decodeURIComponent(hostileUrl.split('?text=')[1])
+// A stray & or # would truncate the query string if it were not encoded.
+const hostile = buildUpdateMessage({ label: 'Query', who: 'a&b#c', when: WHEN })
+const hostileBack = decodeURIComponent(whatsappUrl(hostile).split('?text=')[1])
 check('ampersand and hash survive encoding', hostileBack === hostile,
       hostileBack === hostile ? 'identical' : 'DIFFERS')
-check('no bare & inside the encoded text', !hostileUrl.slice(hostileUrl.indexOf('?text=') + 6).includes('&'))
+check('no bare & inside the encoded text',
+      !whatsappUrl(hostile).slice(whatsappUrl(hostile).indexOf('?text=') + 6).includes('&'))
 
-console.log('\n--- site url ---')
-check('returns null outside a browser', siteUrl() === null, String(siteUrl()))
-
-console.log(`\n   full url length: ${url.length} chars`)
-check('url is a sane length for a browser', url.length < 2000, `${url.length}`)
+console.log(`\n   full url: ${url}`)
+check('url is a sane length for a browser', url.length < 2000, `${url.length} chars`)
 
 report()

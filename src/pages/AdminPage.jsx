@@ -9,7 +9,7 @@ import {
 } from '../lib/useLastUpdate'
 import { useAdminPresence, listNames } from '../lib/useAdminPresence'
 import { exportInventoryCsv, exportFileName, saveBlob } from '../lib/export'
-import { buildUpdateMessage, whatsappUrl, siteUrl } from '../lib/notify'
+import { buildUpdateMessage, whatsappUrl } from '../lib/notify'
 import { writeClipboard } from '../lib/clipboard'
 import { useAuth } from '../lib/AuthContext'
 
@@ -45,6 +45,7 @@ const UPLOADS = [
     logTable: 'inventory',
     title: 'Query',
     replaceLabel: 'Query data',
+    notifyLabel: 'Query',
     subtitle: 'The daily stock export from the WMS',
     accept: '.xls,.xlsm,.xlsx',
     multiple: true,
@@ -58,6 +59,7 @@ const UPLOADS = [
     logTable: 'master_data',
     title: 'Master Data (PFEP)',
     replaceLabel: 'Master Data',
+    notifyLabel: 'Master Data',
     subtitle: 'Part names, car type and DLOC',
     accept: '.xlsb,.xlsx,.xls',
     multiple: true,
@@ -93,14 +95,7 @@ function NotifyTeam({ config, result, who }) {
   const [copied, setCopied] = useState(false)
   const [copyError, setCopyError] = useState(null)
 
-  const message = buildUpdateMessage({
-    label: config.replaceLabel,
-    rows: result.rows,
-    files: result.files,
-    seconds: result.seconds,
-    who,
-    url: siteUrl(),
-  })
+  const message = buildUpdateMessage({ label: config.notifyLabel, who })
 
   useEffect(() => {
     if (!copied) return
