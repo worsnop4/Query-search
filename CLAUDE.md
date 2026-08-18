@@ -21,6 +21,7 @@ real data and is not obvious from the code.
 | Search filter by zone type | **Working** — needs `02_search_helpers.sql` re-run for the `zone_types` view |
 | Admin CSV export of all inventory | **Working, verified** — 194,377 rows, 26 MB, 17s |
 | Copy search results to clipboard | **Working, verified** — TSV, all matching rows not just the page |
+| WhatsApp "notify group" after an upload | **Working** — pre-fills the message; the group is picked by hand, see below |
 | Vercel deploy | Live, auto-deploys from `main` |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Not started** — has open questions, see below |
@@ -125,6 +126,25 @@ An export must not run during an upload: `swap_inventory()` truncates and
 re-inserts, so every id changes mid-read. The download button is disabled while
 an admin holds the inventory claim, and the row count is compared before and
 after as a backstop.
+
+### WhatsApp cannot be deep-linked to a group
+
+After a successful upload the admin gets a **Notify group on WhatsApp** button.
+It opens WhatsApp Web with the message already written; the admin then picks
+the group and presses send.
+
+That last step cannot be automated, and it is not for want of trying:
+WhatsApp's click-to-chat scheme accepts a phone number (`wa.me/<number>`) or no
+recipient at all, and group chats have no addressable id in it. The
+`chat.whatsapp.com/<code>` links are **invite** links — following one offers to
+*join* the group, it does not open a compose box. There is no API for posting
+to a group without WhatsApp Business, which is a different product with its own
+onboarding.
+
+So do not "fix" this by putting a group invite link in the button. It would
+send people a join prompt instead of a message. `src/lib/notify.js` builds the
+text; `scripts/test-notify.mjs` covers the message shape and the URL encoding
+(a bare `&` or newline in the text would otherwise truncate the query string).
 
 ### Columns are mapped by HEADER NAME, never by position
 

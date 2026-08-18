@@ -9,6 +9,9 @@ import {
 } from '../lib/useLastUpdate'
 import { useAdminPresence, listNames } from '../lib/useAdminPresence'
 import { exportInventoryCsv, exportFileName, saveBlob } from '../lib/export'
+import { buildUpdateMessage, whatsappUrl, siteUrl } from '../lib/notify'
+import { writeClipboard } from '../lib/clipboard'
+import { useAuth } from '../lib/AuthContext'
 
 const nf = new Intl.NumberFormat()
 
@@ -82,7 +85,71 @@ function CardLastUpdate({ table }) {
   )
 }
 
-function UploadCard({ config, sessionId, uploader, onFinished }) {
+// Shown after a successful upload. WhatsApp cannot be pointed at a group from
+// a link - see the note in lib/notify.js - so this writes the message and the
+// admin chooses the group. Copy is offered alongside for anyone not using
+// WhatsApp Web, or who wants to paste it somewhere else entirely.
+function NotifyTeam({ config, result, who }) {
+  const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState(null)
+
+  const message = buildUpdateMessage({
+    label: config.replaceLabel,
+    rows: result.rows,
+    files: result.files,
+    seconds: result.seconds,
+    who,
+    url: siteUrl(),
+  })
+
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(false), 2500)
+    return () => clearTimeout(t)
+  }, [copied])
+
+  async function copy() {
+    setCopyError(null)
+    try {
+      await writeClipboard(message)
+      setCopied(true)
+    } catch (err) {
+      setCopyError(err.message ?? String(err))
+    }
+  }
+
+  return (
+    <div className="notify">
+      <div className="notifyactions">
+        <a
+          className="btn wa"
+          href={whatsappUrl(message)}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Notify group on WhatsApp
+        </a>
+        <button type="button" className="ghost small" onClick={copy}>
+          {copied ? '✓ Copied' : 'Copy message'}
+        </button>
+      </div>
+
+      <details className="notifypreview">
+        <summary>What will be sent</summary>
+        <pre>{message}</pre>
+      </details>
+
+      <p className="muted small">
+        WhatsApp Web opens with this ready — pick the group and press send. A
+        link cannot choose the group for you.
+      </p>
+
+      {copyError && <span className="muted small">{copyError}</span>}
+    </div>
+  )
+}
+
+function UploadCard({ config, sessionId, uploader, onFinished, who }) {
   const [files, setFiles] = useState([])
   const [parsed, setParsed] = useState(null)
   const [progress, setProgress] = useState(null)
@@ -325,6 +392,7 @@ function UploadCard({ config, sessionId, uploader, onFinished }) {
           {nf.format(result.rows)} rows are now live
           {result.files > 1 && ` from ${nf.format(result.files)} files`}, replaced in{' '}
           {formatDuration(result.seconds)}.
+          <NotifyTeam config={config} result={result} who={who} />
         </div>
       )}
 
@@ -618,6 +686,12 @@ function DownloadCard({ blockedBy }) {
 
 export default function AdminPage() {
   const { sessionId, others, uploaderOf, refresh } = useAdminPresence(true)
+  const { session } = useAuth()
+
+  // Just for the notification text, so it reads "by dian.ayu" rather than
+  // anonymously. Same local-part rule the database uses for presence names -
+  // this one is cosmetic, so deriving it here is fine.
+  const who = session?.user?.email?.split('@')[0] ?? null
 
   return (
     <div className="admin">
@@ -636,6 +710,7 @@ export default function AdminPage() {
           sessionId={sessionId}
           uploader={uploaderOf(u.logTable)}
           onFinished={refresh}
+          who={who}
         />
       ))}
 

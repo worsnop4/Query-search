@@ -268,6 +268,65 @@ button.ghost {
   min-width: 0;
 }
 
+/* ---------- notify the team after an upload ---------- */
+
+.notify {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.notifyactions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* WhatsApp brand green, so the button is recognisable at a glance. */
+.btn.wa {
+  background: #25d366;
+  color: #05231a;
+  font-weight: 600;
+}
+
+.btn.wa:hover {
+  filter: brightness(1.06);
+}
+
+.notifypreview {
+  margin-top: 10px;
+}
+
+.notifypreview summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  user-select: none;
+}
+
+.notifypreview summary:hover {
+  color: var(--text);
+}
+
+.notifypreview pre {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.notify p.small {
+  margin: 8px 0 0;
+}
+
 /* Sits at the right of the results header, opposite the row count. */
 .copybtn {
   flex: none;
