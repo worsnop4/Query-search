@@ -20,6 +20,7 @@ real data and is not obvious from the code.
 | Admin presence + exclusive upload claim | **Working, verified with two real accounts** |
 | Search filter by zone type | **Working** — needs `02_search_helpers.sql` re-run for the `zone_types` view |
 | Admin CSV export of all inventory | **Working, verified** — 194,377 rows, 26 MB, 17s |
+| Copy search results to clipboard | **Working, verified** — TSV, all matching rows not just the page |
 | Vercel deploy | Live, auto-deploys from `main` |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Not started** — has open questions, see below |
@@ -108,6 +109,17 @@ requests, five at a time, about 17 seconds for 194k rows.
 Always `.order('id')` when paging. Without a stable sort Postgres may hand back
 the same row on two pages and skip another, producing a file that looks
 complete and is not. `scripts/test-export.mjs` asserts exactly this.
+
+The search page needs the same tiebreaker for the same reason, and it is easy
+to miss because the visible sort *looks* specific enough: `part_number`,
+`location` and `case_no` together are **not unique** in this data. A single
+result set of six part numbers contained 83 rows sharing all three. That is
+harmless for a 100-row page but would corrupt the multi-page clipboard copy, so
+`resultQuery()` in `SearchPage.jsx` ends with `.order('id')`.
+
+Note what this bug is like: an unstable sort is *permitted* to return correct
+results, and in testing it did. It cannot be reliably reproduced, only
+prevented. Don't remove the tiebreaker because a run looked fine without it.
 
 An export must not run during an upload: `swap_inventory()` truncates and
 re-inserts, so every id changes mid-read. The download button is disabled while

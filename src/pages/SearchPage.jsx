@@ -1,7 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { toTsv, writeClipboard } from '../lib/clipboard'
 
 const PAGE_SIZE = 100
+
+// PostgREST caps a response at 1,000 rows on this project, so a copy of more
+// than that is fetched a page at a time - the same cap the CSV export hits.
+const COPY_PAGE = 1000
+
+// The columns on screen, in the same order, so what lands in Excel matches
+// what the person was looking at when they pressed the button.
+const COPY_HEADERS = ['Part Number', 'Part Name', 'Case No', 'Location', 'Zone Type', 'Qty']
+const COPY_COLUMNS = ['part_number', 'part_name', 'case_no', 'location', 'zone_type', 'quantity']
 
 // One part number can return thousands of rows, but the limit here is about
 // URL length: .in() becomes a query string, and too many values overflow it.
@@ -109,34 +119,105 @@ export default function SearchPage() {
   const reqRef = useRef(0)
   const searchRef = useRef(0)
 
+  const [copyState, setCopyState] = useState('idle') // idle | copying | copied
+  const [copyError, setCopyError] = useState(null)
+  const [copyDone, setCopyDone] = useState(0)
+
   // The part numbers the current search is for. A ref as well as state
   // because changeFilter/reload need them in the same tick that runSearch
   // sets them, before React has committed the state update.
   const partsRef = useRef([])
 
+  // The one place the result set is defined, so the table and the copy button
+  // can never disagree about what "the result" is.
+  //
   // No index on zone_type, and none needed: .in('part_number', ...) narrows to
   // at most a few thousand rows first, so the zone filter never scans the
   // whole 194k-row table.
-  async function fetchPage(searchParts, filter, zoneList, pageIndex) {
-    const from = pageIndex * PAGE_SIZE
+  //
+  // The trailing .order('id') is a tiebreaker, not cosmetic. Rows sharing a
+  // part number, location AND case number are ordinary here - 6-8% of the
+  // table - so those three columns are not a unique sort, and with LIMIT/OFFSET
+  // Postgres is free to return the same row on two pages and drop another.
+  // Invisible in a 100-row page; it would quietly corrupt a multi-page copy.
+  function resultQuery(searchParts, filter, zoneList, select, opts) {
     let q = supabase
       .from('inventory')
-      .select('part_number, case_no, location, zone_type, quantity, is_case_opened', {
-        count: 'exact',
-      })
+      .select(select, opts)
       .in('part_number', searchParts)
       .order('part_number')
       .order('location')
       .order('case_no')
-      .range(from, from + PAGE_SIZE - 1)
+      .order('id')
 
     if (filter !== 'all') q = q.eq('is_case_opened', filter)
     if (zoneList.length > 0) q = q.in('zone_type', zoneList)
+    return q
+  }
 
-    const { data, count, error: err } = await q
+  async function fetchPage(searchParts, filter, zoneList, pageIndex) {
+    const from = pageIndex * PAGE_SIZE
+    const { data, count, error: err } = await resultQuery(
+      searchParts,
+      filter,
+      zoneList,
+      'part_number, case_no, location, zone_type, quantity, is_case_opened',
+      { count: 'exact' }
+    ).range(from, from + PAGE_SIZE - 1)
+
     if (err) throw err
     return { data: data ?? [], count: count ?? 0 }
   }
+
+  // Copies EVERY matching row, not just the page on screen - "share the result"
+  // means the result, and a colleague receiving 100 of 264 rows with no hint
+  // that the rest exist is worse than useless. PostgREST caps a response at
+  // 1,000 rows, so anything past that is fetched a page at a time.
+  async function copyAll() {
+    if (total === 0 || copyState === 'copying') return
+
+    setCopyState('copying')
+    setCopyError(null)
+    setCopyDone(0)
+
+    try {
+      const all = []
+      for (let from = 0; from < total; from += COPY_PAGE) {
+        const { data, error: err } = await resultQuery(
+          partsRef.current,
+          caseFilter,
+          zoneFilters,
+          'part_number, case_no, location, zone_type, quantity'
+        ).range(from, from + COPY_PAGE - 1)
+
+        if (err) throw err
+        const batch = data ?? []
+        if (batch.length === 0) break
+        all.push(...batch)
+        setCopyDone(all.length)
+      }
+
+      // part_name lives in master_data, already fetched once for this search.
+      const withNames = all.map((r) => ({
+        ...r,
+        part_name: names[r.part_number] ?? '',
+      }))
+
+      await writeClipboard(toTsv(COPY_HEADERS, withNames, COPY_COLUMNS))
+      setCopyState('copied')
+    } catch (err) {
+      setCopyError(err.message ?? String(err))
+      setCopyState('idle')
+    }
+  }
+
+  // Let the tick fade back to the normal label so the button is obviously
+  // ready to be used again.
+  useEffect(() => {
+    if (copyState !== 'copied') return
+    const t = setTimeout(() => setCopyState('idle'), 2500)
+    return () => clearTimeout(t)
+  }, [copyState])
 
   async function runSearch(e) {
     e?.preventDefault()
@@ -162,6 +243,7 @@ export default function SearchPage() {
     setSearched(true)
     setParts(searchParts)
     setPage(0)
+    resetCopy()
 
     try {
       const [first, nameRes, foundRes] = await Promise.all([
@@ -202,6 +284,9 @@ export default function SearchPage() {
     const reqId = ++reqRef.current
     setLoading(true)
     setError(null)
+    // Changing filter or page changes what "copy" would mean - drop any
+    // lingering "Copied" tick so it cannot describe the previous result set.
+    resetCopy()
     try {
       const { data, count } = await fetchPage(searchParts, filter, zone, pageIndex)
       if (reqRef.current !== reqId) return
@@ -253,6 +338,13 @@ export default function SearchPage() {
     setPage(0)
     setError(null)
     setSearched(false)
+    resetCopy()
+  }
+
+  function resetCopy() {
+    setCopyState('idle')
+    setCopyError(null)
+    setCopyDone(0)
   }
 
   const activeFilters = countActiveFilters(caseFilter, zoneFilters)
@@ -363,25 +455,49 @@ export default function SearchPage() {
       {searched && !error && (
         <>
           <div className="summary">
-            {loading ? (
-              'Loading...'
-            ) : total === 0 ? (
-              <>
-                No rows found for{' '}
-                {parts.length === 1
-                  ? parts[0]
-                  : `these ${nf.format(parts.length)} part numbers`}
-                {filterNote(caseFilter, zoneFilters)}.
-              </>
-            ) : (
-              <>
-                Showing <strong>{nf.format(firstRow)}</strong>&ndash;
-                <strong>{nf.format(lastRow)}</strong> of{' '}
-                <strong>{nf.format(total)}</strong> rows
-                {parts.length > 1 && ` across ${nf.format(parts.length)} part numbers`}
-              </>
+            <div className="summarytext">
+              {loading ? (
+                'Loading...'
+              ) : total === 0 ? (
+                <>
+                  No rows found for{' '}
+                  {parts.length === 1
+                    ? parts[0]
+                    : `these ${nf.format(parts.length)} part numbers`}
+                  {filterNote(caseFilter, zoneFilters)}.
+                </>
+              ) : (
+                <>
+                  Showing <strong>{nf.format(firstRow)}</strong>&ndash;
+                  <strong>{nf.format(lastRow)}</strong> of{' '}
+                  <strong>{nf.format(total)}</strong> rows
+                  {parts.length > 1 && ` across ${nf.format(parts.length)} part numbers`}
+                </>
+              )}
+            </div>
+
+            {!loading && total > 0 && (
+              <button
+                type="button"
+                className={`copybtn${copyState === 'copied' ? ' ok' : ''}`}
+                onClick={copyAll}
+                disabled={copyState === 'copying'}
+                title={
+                  total > PAGE_SIZE
+                    ? `Copies all ${nf.format(total)} rows, not just this page. Paste straight into Excel.`
+                    : 'Copy these rows. Paste straight into Excel.'
+                }
+              >
+                {copyState === 'copying'
+                  ? `Copying ${nf.format(copyDone)} / ${nf.format(total)}...`
+                  : copyState === 'copied'
+                    ? '✓ Copied'
+                    : `Copy ${nf.format(total)} rows`}
+              </button>
             )}
           </div>
+
+          {copyError && <div className="error">{copyError}</div>}
 
           {missing.length > 0 && (
             <div className="warn">

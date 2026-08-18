@@ -254,9 +254,56 @@ button.ghost {
 }
 
 .summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
   margin: 22px 0 10px;
   font-size: 14px;
   color: var(--muted);
+}
+
+.summarytext {
+  min-width: 0;
+}
+
+/* Sits at the right of the results header, opposite the row count. */
+.copybtn {
+  flex: none;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 550;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.copybtn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.copybtn:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+
+.copybtn.ok,
+.copybtn.ok:hover {
+  border-color: #16a34a;
+  color: #16a34a;
+}
+
+@media (prefers-color-scheme: dark) {
+  .copybtn.ok,
+  .copybtn.ok:hover {
+    border-color: #4ade80;
+    color: #4ade80;
+  }
 }
 
 .summary strong {
