@@ -15,8 +15,11 @@ const supabase = createClient(
 )
 
 const COPY_PAGE = 1000
-const COPY_HEADERS = ['Part Number', 'Part Name', 'Case No', 'Location', 'Zone Type', 'Qty']
-const COPY_COLUMNS = ['part_number', 'part_name', 'case_no', 'location', 'zone_type', 'quantity']
+
+// Deliberately a subset of the table's columns: what the operation team passes
+// around is where a part is and how many, not its name or zone type.
+const COPY_HEADERS = ['Part Number', 'Case No', 'Location', 'Qty']
+const COPY_COLUMNS = ['part_number', 'case_no', 'location', 'quantity']
 
 // ---------------------------------------------------------------- TSV shaping
 console.log('--- TSV shaping ---')
@@ -33,16 +36,20 @@ check('embedded newline collapsed', tsvCell('A\nB') === 'A B', JSON.stringify(ts
 check('CRLF collapsed to one space', tsvCell('A\r\nB') === 'A B', JSON.stringify(tsvCell('A\r\nB')))
 
 const tsv = toTsv(COPY_HEADERS, [
+  // Extra fields on the source rows must be ignored, not leak into the output.
   { part_number: '12109505-PYX', part_name: 'BODY ASM-PAINT', case_no: 'P03780830', location: 'CENTRAL-BIW', zone_type: 'DLOC Area', quantity: 1 },
-  { part_number: '26184917', part_name: null, case_no: 'LAID1610', location: 'BATTERY-SHOP', zone_type: 'OF Area', quantity: 75 },
+  { part_number: '26184917', case_no: 'LAID1610', location: 'BATTERY-SHOP', quantity: 75 },
 ], COPY_COLUMNS)
 
 const lines = tsv.split('\n')
 check('header line present', lines[0] === COPY_HEADERS.join('\t'), lines[0])
 check('one line per row plus header', lines.length === 3, String(lines.length))
-check('every line has 6 columns', lines.every((l) => l.split('\t').length === 6),
+check('every line has 4 columns', lines.every((l) => l.split('\t').length === 4),
       lines.map((l) => l.split('\t').length).join(','))
-check('missing part name is blank, not "null"', lines[2].split('\t')[1] === '', `"${lines[2].split('\t')[1]}"`)
+check('part name is not copied', !tsv.includes('BODY ASM-PAINT'), 'absent')
+check('zone type is not copied', !tsv.includes('DLOC Area'), 'absent')
+check('columns are in the asked-for order',
+      lines[1] === '12109505-PYX\tP03780830\tCENTRAL-BIW\t1', JSON.stringify(lines[1]))
 console.log(`   sample line: ${JSON.stringify(lines[1])}\n`)
 
 // ------------------------------------------------------------ live pagination
@@ -115,11 +122,10 @@ console.log(
       : `  <-- ${untied.length - untiedUnique} DUPLICATED`)
 )
 
-const withNames = all.map((r) => ({ ...r, part_name: 'X' }))
-const bigTsv = toTsv(COPY_HEADERS, withNames, COPY_COLUMNS)
+const bigTsv = toTsv(COPY_HEADERS, all, COPY_COLUMNS)
 const bigLines = bigTsv.split('\n')
 check('TSV line count matches row count', bigLines.length === all.length + 1, `${bigLines.length} vs ${all.length + 1}`)
-check('no line has a stray tab count', bigLines.every((l) => l.split('\t').length === 6), 'ok')
+check('no line has a stray tab count', bigLines.every((l) => l.split('\t').length === 4), 'ok')
 console.log(`   clipboard payload: ${(bigTsv.length / 1024).toFixed(0)} KB`)
 
 report()

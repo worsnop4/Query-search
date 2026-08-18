@@ -9,10 +9,15 @@ const PAGE_SIZE = 100
 // than that is fetched a page at a time - the same cap the CSV export hits.
 const COPY_PAGE = 1000
 
-// The columns on screen, in the same order, so what lands in Excel matches
-// what the person was looking at when they pressed the button.
-const COPY_HEADERS = ['Part Number', 'Part Name', 'Case No', 'Location', 'Zone Type', 'Qty']
-const COPY_COLUMNS = ['part_number', 'part_name', 'case_no', 'location', 'zone_type', 'quantity']
+// A deliberate SUBSET of the columns on screen, not all of them. This is what
+// the operation team actually passes around: where a part is and how many.
+// Part Name and Zone Type are useful for reading the table and only get in the
+// way once the rows are pasted into a message or a sheet.
+//
+// Because part_name is not here, a copy needs no master_data lookup at all -
+// it is purely the inventory rows.
+const COPY_HEADERS = ['Part Number', 'Case No', 'Location', 'Qty']
+const COPY_COLUMNS = ['part_number', 'case_no', 'location', 'quantity']
 
 // One part number can return thousands of rows, but the limit here is about
 // URL length: .in() becomes a query string, and too many values overflow it.
@@ -195,7 +200,7 @@ export default function SearchPage() {
           partsRef.current,
           caseFilter,
           zoneFilters,
-          'part_number, case_no, location, zone_type, quantity'
+          COPY_COLUMNS.join(', ')
         ).range(from, from + COPY_PAGE - 1)
 
         if (err) throw err
@@ -205,22 +210,7 @@ export default function SearchPage() {
         setCopyDone(all.length)
       }
 
-      // Names are known up front for an exact search. A partial one may have
-      // matched parts that never appeared on a page the user looked at, so
-      // fill in whatever is missing before building the file.
-      let nameMap = names
-      const unknown = all.map((r) => r.part_number).filter((p) => !(p in nameMap))
-      if (unknown.length > 0) {
-        nameMap = { ...nameMap, ...(await fetchNames(unknown)) }
-        setNames(nameMap)
-      }
-
-      const withNames = all.map((r) => ({
-        ...r,
-        part_name: nameMap[r.part_number] ?? '',
-      }))
-
-      await writeClipboard(toTsv(COPY_HEADERS, withNames, COPY_COLUMNS))
+      await writeClipboard(toTsv(COPY_HEADERS, all, COPY_COLUMNS))
       setCopyState('copied')
     } catch (err) {
       setCopyError(err.message ?? String(err))
