@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { toTsv, writeClipboard } from '../lib/clipboard'
+import { readCriteria, PARTIAL_MIN } from '../lib/searchTerms'
 
 const PAGE_SIZE = 100
 
@@ -23,19 +24,6 @@ const CASE_FILTERS = [
   { value: 'No', label: 'Not opened only' },
 ]
 
-// Accepts a single part number or many pasted together, separated by commas,
-// spaces, tabs, semicolons or newlines - so a column copied straight out of
-// Excel works. Every part number in both source files is uppercase, so
-// upper-casing the input makes the search forgiving without breaking the
-// exact match.
-function parseParts(text) {
-  const seen = new Set()
-  for (const raw of text.split(/[\s,;]+/)) {
-    const p = raw.trim().toUpperCase()
-    if (p) seen.add(p)
-  }
-  return [...seen]
-}
 
 const nf = new Intl.NumberFormat()
 
@@ -99,7 +87,10 @@ export default function SearchPage() {
 
   const zones = useZoneTypes()
 
-  const [parts, setParts] = useState([])
+  // What the current results are FOR: either an exact list of part numbers or
+  // a partial term. Held as one object so the table, the pager and the copy
+  // button can never disagree about which of the two is in play.
+  const [criteria, setCriteria] = useState({ mode: 'empty', parts: [] })
   const [rows, setRows] = useState([])
   const [names, setNames] = useState({})
   const [missing, setMissing] = useState([])
@@ -123,10 +114,10 @@ export default function SearchPage() {
   const [copyError, setCopyError] = useState(null)
   const [copyDone, setCopyDone] = useState(0)
 
-  // The part numbers the current search is for. A ref as well as state
-  // because changeFilter/reload need them in the same tick that runSearch
-  // sets them, before React has committed the state update.
-  const partsRef = useRef([])
+  // The criteria the current search is for. A ref as well as state because
+  // changeFilter/reload need them in the same tick that runSearch sets them,
+  // before React has committed the state update.
+  const partsRef = useRef({ mode: 'empty', parts: [] })
 
   // The one place the result set is defined, so the table and the copy button
   // can never disagree about what "the result" is.
@@ -140,25 +131,25 @@ export default function SearchPage() {
   // table - so those three columns are not a unique sort, and with LIMIT/OFFSET
   // Postgres is free to return the same row on two pages and drop another.
   // Invisible in a 100-row page; it would quietly corrupt a multi-page copy.
-  function resultQuery(searchParts, filter, zoneList, select, opts) {
-    let q = supabase
-      .from('inventory')
-      .select(select, opts)
-      .in('part_number', searchParts)
-      .order('part_number')
-      .order('location')
-      .order('case_no')
-      .order('id')
+  function resultQuery(criteria, filter, zoneList, select, opts) {
+    let q = supabase.from('inventory').select(select, opts)
+
+    // Partial searches lean on the pg_trgm index from 06_partial_search.sql.
+    // Without it this is a full scan of ~197k rows, roughly 0.8s per search.
+    if (criteria.mode === 'partial') q = q.ilike('part_number', `%${criteria.term}%`)
+    else q = q.in('part_number', criteria.parts)
+
+    q = q.order('part_number').order('location').order('case_no').order('id')
 
     if (filter !== 'all') q = q.eq('is_case_opened', filter)
     if (zoneList.length > 0) q = q.in('zone_type', zoneList)
     return q
   }
 
-  async function fetchPage(searchParts, filter, zoneList, pageIndex) {
+  async function fetchPage(criteria, filter, zoneList, pageIndex) {
     const from = pageIndex * PAGE_SIZE
     const { data, count, error: err } = await resultQuery(
-      searchParts,
+      criteria,
       filter,
       zoneList,
       'part_number, case_no, location, zone_type, quantity, is_case_opened',
@@ -167,6 +158,23 @@ export default function SearchPage() {
 
     if (err) throw err
     return { data: data ?? [], count: count ?? 0 }
+  }
+
+  // An exact search knows its part numbers up front. A partial one does not -
+  // it discovers them - so names are looked up from whatever came back.
+  // Chunked because .in() becomes a query string and a long one overflows it.
+  async function fetchNames(partNumbers) {
+    const out = {}
+    const list = [...new Set(partNumbers)]
+    for (let i = 0; i < list.length; i += MAX_PARTS) {
+      const { data, error: err } = await supabase
+        .from('master_data')
+        .select('part_number, part_name')
+        .in('part_number', list.slice(i, i + MAX_PARTS))
+      if (err) throw err
+      for (const r of data ?? []) out[r.part_number] = r.part_name
+    }
+    return out
   }
 
   // Copies EVERY matching row, not just the page on screen - "share the result"
@@ -197,10 +205,19 @@ export default function SearchPage() {
         setCopyDone(all.length)
       }
 
-      // part_name lives in master_data, already fetched once for this search.
+      // Names are known up front for an exact search. A partial one may have
+      // matched parts that never appeared on a page the user looked at, so
+      // fill in whatever is missing before building the file.
+      let nameMap = names
+      const unknown = all.map((r) => r.part_number).filter((p) => !(p in nameMap))
+      if (unknown.length > 0) {
+        nameMap = { ...nameMap, ...(await fetchNames(unknown)) }
+        setNames(nameMap)
+      }
+
       const withNames = all.map((r) => ({
         ...r,
-        part_name: names[r.part_number] ?? '',
+        part_name: nameMap[r.part_number] ?? '',
       }))
 
       await writeClipboard(toTsv(COPY_HEADERS, withNames, COPY_COLUMNS))
@@ -221,15 +238,22 @@ export default function SearchPage() {
 
   async function runSearch(e) {
     e?.preventDefault()
-    const searchParts = parseParts(input)
+    const criteria = readCriteria(input)
 
-    if (searchParts.length === 0) {
-      setError('Enter at least one part number.')
+    if (criteria.mode === 'empty') {
+      setError('Enter a part number, or at least the last 4 digits of one.')
       return
     }
-    if (searchParts.length > MAX_PARTS) {
+    if (criteria.mode === 'tooshort') {
       setError(
-        `That is ${nf.format(searchParts.length)} part numbers. ` +
+        `"${criteria.parts[0]}" is too short. Type at least ${PARTIAL_MIN} ` +
+          'characters of the part number - the last 4 digits are enough.'
+      )
+      return
+    }
+    if (criteria.parts.length > MAX_PARTS) {
+      setError(
+        `That is ${nf.format(criteria.parts.length)} part numbers. ` +
           `Please search at most ${MAX_PARTS} at a time.`
       )
       return
@@ -237,38 +261,50 @@ export default function SearchPage() {
 
     const reqId = ++reqRef.current
     const searchId = ++searchRef.current
-    partsRef.current = searchParts
+    partsRef.current = criteria
     setLoading(true)
     setError(null)
     setSearched(true)
-    setParts(searchParts)
+    setCriteria(criteria)
     setPage(0)
     resetCopy()
 
     try {
-      const [first, nameRes, foundRes] = await Promise.all([
-        fetchPage(searchParts, caseFilter, zoneFilters, 0),
-        supabase
-          .from('master_data')
-          .select('part_number, part_name')
-          .in('part_number', searchParts),
-        supabase.rpc('found_part_numbers', { pns: searchParts }),
-      ])
+      const first = await fetchPage(criteria, caseFilter, zoneFilters, 0)
 
-      if (nameRes.error) throw nameRes.error
-      if (foundRes.error) throw foundRes.error
-
-      const nameMap = {}
-      for (const r of nameRes.data ?? []) nameMap[r.part_number] = r.part_name
-      const found = new Set((foundRes.data ?? []).map((r) => r.part_number))
-
-      if (searchRef.current === searchId) {
-        setNames(nameMap)
-        setMissing(searchParts.filter((p) => !found.has(p)))
+      if (reqRef.current === reqId) {
+        setRows(first.data)
+        setTotal(first.count)
       }
-      if (reqRef.current !== reqId) return
-      setRows(first.data)
-      setTotal(first.count)
+
+      if (criteria.mode === 'partial') {
+        // Nothing was "not found" - a partial search asks which parts exist,
+        // it does not assert any. Names come from what actually matched.
+        const nameMap = await fetchNames(first.data.map((r) => r.part_number))
+        if (searchRef.current === searchId) {
+          setNames(nameMap)
+          setMissing([])
+        }
+      } else {
+        const [nameRes, foundRes] = await Promise.all([
+          supabase
+            .from('master_data')
+            .select('part_number, part_name')
+            .in('part_number', criteria.parts),
+          supabase.rpc('found_part_numbers', { pns: criteria.parts }),
+        ])
+        if (nameRes.error) throw nameRes.error
+        if (foundRes.error) throw foundRes.error
+
+        const nameMap = {}
+        for (const r of nameRes.data ?? []) nameMap[r.part_number] = r.part_name
+        const found = new Set((foundRes.data ?? []).map((r) => r.part_number))
+
+        if (searchRef.current === searchId) {
+          setNames(nameMap)
+          setMissing(criteria.parts.filter((p) => !found.has(p)))
+        }
+      }
     } catch (err) {
       if (reqRef.current !== reqId) return
       setError(err.message ?? String(err))
@@ -280,7 +316,7 @@ export default function SearchPage() {
     }
   }
 
-  async function reload(filter, zone, pageIndex, searchParts = partsRef.current) {
+  async function reload(filter, zone, pageIndex, crit = partsRef.current) {
     const reqId = ++reqRef.current
     setLoading(true)
     setError(null)
@@ -288,11 +324,22 @@ export default function SearchPage() {
     // lingering "Copied" tick so it cannot describe the previous result set.
     resetCopy()
     try {
-      const { data, count } = await fetchPage(searchParts, filter, zone, pageIndex)
+      const { data, count } = await fetchPage(crit, filter, zone, pageIndex)
       if (reqRef.current !== reqId) return
       setRows(data)
       setTotal(count)
       setPage(pageIndex)
+
+      // A partial search discovers its part numbers, so page 2 may hold parts
+      // page 1 never mentioned. Merge rather than replace - going back to a
+      // previous page would otherwise blank out names already looked up.
+      if (crit.mode === 'partial') {
+        const unknown = data.map((r) => r.part_number).filter((p) => !(p in names))
+        if (unknown.length > 0) {
+          const more = await fetchNames(unknown)
+          if (reqRef.current === reqId) setNames((prev) => ({ ...prev, ...more }))
+        }
+      }
     } catch (err) {
       if (reqRef.current !== reqId) return
       setError(err.message ?? String(err))
@@ -327,10 +374,10 @@ export default function SearchPage() {
     // `loading` on its behalf, so do it here.
     reqRef.current++
     searchRef.current++
-    partsRef.current = []
+    partsRef.current = { mode: 'empty', parts: [] }
     setLoading(false)
     setInput('')
-    setParts([])
+    setCriteria({ mode: 'empty', parts: [] })
     setRows([])
     setNames({})
     setMissing([])
@@ -352,6 +399,11 @@ export default function SearchPage() {
   const firstRow = total === 0 ? 0 : page * PAGE_SIZE + 1
   const lastRow = Math.min(total, (page + 1) * PAGE_SIZE)
 
+  // Distinct parts on the page being shown. Deliberately not the whole result
+  // set: counting those would need another query, and the honest thing is to
+  // describe what is actually on screen.
+  const pageParts = new Set(rows.map((r) => r.part_number)).size
+
   return (
     <>
       <form onSubmit={runSearch} className="search">
@@ -363,7 +415,9 @@ export default function SearchPage() {
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) runSearch(e)
           }}
-          placeholder={'23588931\nor paste many: 23588931, 23593625, 11559571-PMC'}
+          placeholder={
+            '23588931\nor just the last 4 digits: 8931\nor paste many: 23588931, 23593625, 11559571-PMC'
+          }
           rows={4}
           spellCheck={false}
         />
@@ -461,9 +515,11 @@ export default function SearchPage() {
               ) : total === 0 ? (
                 <>
                   No rows found for{' '}
-                  {parts.length === 1
-                    ? parts[0]
-                    : `these ${nf.format(parts.length)} part numbers`}
+                  {criteria.mode === 'partial'
+                    ? `part numbers containing ${criteria.term}`
+                    : criteria.parts.length === 1
+                      ? criteria.parts[0]
+                      : `these ${nf.format(criteria.parts.length)} part numbers`}
                   {filterNote(caseFilter, zoneFilters)}.
                 </>
               ) : (
@@ -471,7 +527,20 @@ export default function SearchPage() {
                   Showing <strong>{nf.format(firstRow)}</strong>&ndash;
                   <strong>{nf.format(lastRow)}</strong> of{' '}
                   <strong>{nf.format(total)}</strong> rows
-                  {parts.length > 1 && ` across ${nf.format(parts.length)} part numbers`}
+                  {/* A partial search matched parts nobody named, so say how
+                      many - otherwise it is not obvious the search was fuzzy. */}
+                  {criteria.mode === 'partial' ? (
+                    <>
+                      {' '}
+                      across <strong>{nf.format(pageParts)}</strong>
+                      {pageParts === 1 ? ' part number' : ' part numbers'} containing{' '}
+                      <strong>{criteria.term}</strong>
+                      {total > PAGE_SIZE && ' on this page'}
+                    </>
+                  ) : (
+                    criteria.parts.length > 1 &&
+                    ` across ${nf.format(criteria.parts.length)} part numbers`
+                  )}
                 </>
               )}
             </div>

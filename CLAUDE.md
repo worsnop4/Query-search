@@ -22,6 +22,7 @@ real data and is not obvious from the code.
 | Admin CSV export of all inventory | **Working, verified** — 194,377 rows, 26 MB, 17s |
 | Copy search results to clipboard | **Working, verified** — TSV, all matching rows not just the page |
 | WhatsApp "notify group" after an upload | **Working** — pre-fills the message; the group is picked by hand, see below |
+| Partial search by last 4 digits | **Working** — needs `06_partial_search.sql` for the trigram index, or it is ~0.8s per search |
 | Vercel deploy | Live, auto-deploys from `main` |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Not started** — has open questions, see below |
@@ -126,6 +127,33 @@ An export must not run during an upload: `swap_inventory()` truncates and
 re-inserts, so every id changes mid-read. The download button is disabled while
 an admin holds the inventory claim, and the row count is compared before and
 after as a backstop.
+
+### Partial search: contains, not ends-with
+
+The operation team asks for parts by the **last 4 digits**. `src/lib/searchTerms.js`
+decides what typed text means: a single entry of 4–7 characters is a *partial*
+search; a pasted list, or anything 8+ characters, stays an exact `.in()` match,
+which is both faster and precise.
+
+Two decisions in there that look arbitrary and are not:
+
+- **Contains, not ends-with.** 683 parts end in letters, so `10189242-PHD` does
+  not end with `9242` even though that is the part someone means. Measured:
+  `9242` ends-with returns **0 rows**, contains returns **158**. Ends-with looks
+  broken exactly when it matters.
+- **Minimum 4 characters.** 3 characters identifies exactly one part only 1.2%
+  of the time and `00` alone matches 8,822 rows. At 4 the median is **1 match**
+  and the 90th percentile is 3. Do not lower it — a trigram index also cannot
+  help below 3 characters.
+
+The term is stripped to `[A-Z0-9-/]` before it reaches the query. `%` and `_`
+are ILIKE wildcards; a stray `%` would otherwise match the entire table.
+
+**`supabase/06_partial_search.sql` is required for this to be usable.** A
+`contains` match cannot use a btree index, so without the pg_trgm GIN index
+Postgres scans all ~197k rows: measured 700–1000ms per search. With it, well
+under 100ms. `scripts/test-search-terms.mjs` prints a warning if a partial
+search takes over 300ms, which is the tell that the file has not been run.
 
 ### WhatsApp cannot be deep-linked to a group
 
@@ -318,7 +346,11 @@ new file shape appears.
   anyway. RLS: anon SELECT on `inventory`, `master_data`, `upload_log`.
 - **Admin accounts are created by hand** in Supabase → Authentication → Users.
   No signup page.
-- **Exact match** on part numbers, not partial.
+- ~~**Exact match** on part numbers, not partial.~~ **Reversed 15 Aug 2026** —
+  the operation team does not memorise 8-digit numbers, they remember the last
+  four. A single entry of 4–7 characters now matches part numbers *containing*
+  it; a pasted list, or anything 8 characters or longer, is still exact. See
+  "Partial search" below.
 - **Database keeps the name `inventory`** even though the UI says "Query". The
   user explicitly asked for website-only renaming. Do not rename DB objects.
 - **Master data imports four columns**: Part Number, Part Name, Car Type,
