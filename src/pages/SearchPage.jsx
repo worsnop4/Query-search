@@ -314,6 +314,16 @@ export default function SearchPage() {
     // lingering "Copied" tick so it cannot describe the previous result set.
     resetCopy()
     try {
+      // Guard, not paranoia: this signature grew a `zone` argument in the
+      // middle, and the pager kept calling reload(filter, page) - so the page
+      // index arrived as undefined. Nothing threw. `.range(NaN, NaN)` returns
+      // no rows while the exact count still comes back correct, so the page
+      // read "NaN-NaN of 184 rows" over an empty table. Inside the try so a
+      // wrong call says so on screen rather than in the console.
+      if (!Number.isInteger(pageIndex)) {
+        throw new Error(`reload() needs a page index, got ${pageIndex}`)
+      }
+
       const { data, count } = await fetchPage(crit, filter, zone, pageIndex)
       if (reqRef.current !== reqId) return
       setRows(data)
@@ -602,7 +612,7 @@ export default function SearchPage() {
           {totalPages > 1 && (
             <div className="pager">
               <button
-                onClick={() => reload(caseFilter, page - 1)}
+                onClick={() => reload(caseFilter, zoneFilters, page - 1)}
                 disabled={page === 0 || loading}
               >
                 &larr; Previous
@@ -611,7 +621,7 @@ export default function SearchPage() {
                 Page {nf.format(page + 1)} of {nf.format(totalPages)}
               </span>
               <button
-                onClick={() => reload(caseFilter, page + 1)}
+                onClick={() => reload(caseFilter, zoneFilters, page + 1)}
                 disabled={page >= totalPages - 1 || loading}
               >
                 Next &rarr;
