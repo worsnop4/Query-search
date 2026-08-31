@@ -2,17 +2,23 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   RESULTS,
   RESULT_ORDER,
+  ACTIONS,
   readScan,
   summarise,
   accuracy,
+  bucketOf,
   describeScan,
   reportRows,
+  suggestedAction,
 } from '../lib/cycleCount'
 import {
   searchLocations,
+  currentLocks,
   startSession,
   recordScan,
   finishSession,
+  cancelSession,
+  saveFollowup,
   notCheckedCases,
   sessionSummary,
   sessionScans,
@@ -36,6 +42,7 @@ function when(ts) {
 function LocationPicker({ onStarted, onError }) {
   const [term, setTerm] = useState('')
   const [locations, setLocations] = useState([])
+  const [locks, setLocks] = useState([])
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState(null)
 
@@ -47,10 +54,11 @@ function LocationPicker({ onStarted, onError }) {
     const id = ++reqRef.current
     setLoading(true)
     const t = setTimeout(() => {
-      searchLocations(term)
-        .then((rows) => {
+      Promise.all([searchLocations(term), currentLocks()])
+        .then(([rows, held]) => {
           if (reqRef.current !== id) return
           setLocations(rows)
+          setLocks(held)
           setLoading(false)
         })
         .catch((err) => {
@@ -62,6 +70,8 @@ function LocationPicker({ onStarted, onError }) {
     return () => clearTimeout(t)
   }, [term, onError])
 
+  const lockOf = (loc) => locks.find((l) => l.location === loc) ?? null
+
   async function start(location) {
     setStarting(location)
     onError(null)
@@ -70,6 +80,8 @@ function LocationPicker({ onStarted, onError }) {
     } catch (err) {
       onError(err.message)
       setStarting(null)
+      // Someone may have taken the location while the list was on screen.
+      currentLocks().then(setLocks).catch(() => {})
     }
   }
 
@@ -77,7 +89,9 @@ function LocationPicker({ onStarted, onError }) {
     <div className="card">
       <h2>Start a cycle count</h2>
       <p className="muted small">
-        One location at a time, full cases only. Opened cases are not included.
+        One location at a time. Every case Query has there is included, opened
+        or not - a case found full while Query says it was opened is exactly
+        what this is for.
       </p>
 
       <input
@@ -85,7 +99,7 @@ function LocationPicker({ onStarted, onError }) {
         className="ccsearch"
         value={term}
         onChange={(e) => setTerm(e.target.value)}
-        placeholder="Find a location - LHO-NN24-301"
+        placeholder="Find a location - TRANSIT B02"
         spellCheck={false}
         autoComplete="off"
         autoCapitalize="characters"
@@ -98,37 +112,49 @@ function LocationPicker({ onStarted, onError }) {
       )}
 
       <ul className="loclist">
-        {locations.map((l) => (
-          <li key={l.location}>
-            <button
-              type="button"
-              className="locbtn"
-              onClick={() => start(l.location)}
-              disabled={starting !== null}
-            >
-              <span className="mono">{l.location}</span>
-              <span className="muted small">
-                {starting === l.location
-                  ? 'Starting...'
-                  : `${nf.format(l.full_cases)} full case${l.full_cases === 1 ? '' : 's'}`}
-              </span>
-            </button>
-          </li>
-        ))}
+        {locations.map((l) => {
+          const held = lockOf(l.location)
+          return (
+            <li key={l.location}>
+              <button
+                type="button"
+                className="locbtn"
+                onClick={() => start(l.location)}
+                disabled={starting !== null || !!held}
+                title={held ? `${held.started_by} is counting this now` : undefined}
+              >
+                <span className="mono">{l.location}</span>
+                <span className="muted small">
+                  {held ? (
+                    <span className="pill warn">{held.started_by} is counting</span>
+                  ) : starting === l.location ? (
+                    'Starting...'
+                  ) : (
+                    <>
+                      {nf.format(l.cases)} case{l.cases === 1 ? '' : 's'}
+                      {l.opened_cases > 0 && `, ${nf.format(l.opened_cases)} opened`}
+                    </>
+                  )}
+                </span>
+              </button>
+            </li>
+          )
+        })}
       </ul>
     </div>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Scanning
-// ---------------------------------------------------------------------------
 
 function Counters({ counts, expected }) {
   return (
-    <div className="ccounts">
+    <div className="ccounts five">
       {RESULT_ORDER.map((key) => {
-        const n = key === 'not_checked' ? Math.max(0, expected - counts.match) : counts[key]
+        const n =
+          key === 'not_checked'
+            ? Math.max(0, expected - counts.clean_match - counts.opened_mismatch)
+            : counts[key]
         return (
           <div key={key} className={`ccount ${RESULTS[key].tone}`}>
             <strong>{nf.format(n)}</strong>
@@ -145,7 +171,7 @@ function ScanScreen({ session, onFinished, onError }) {
   const [scans, setScans] = useState([])
   const [last, setLast] = useState(null)
   const [busy, setBusy] = useState(false)
-  const [finishing, setFinishing] = useState(false)
+  const [ending, setEnding] = useState(false)
 
   const inputRef = useRef(null)
 
@@ -165,12 +191,7 @@ function ScanScreen({ session, onFinished, onError }) {
         try {
           const row = await recordScan(session.id, next)
           setLast(row)
-          if (!row.already_scanned) {
-            setScans((prev) => [
-              { case_no: row.case_no, result: row.result, system_locations: row.system_locations },
-              ...prev,
-            ])
-          }
+          if (!row.already_scanned) setScans((prev) => [row, ...prev])
         } catch (err) {
           onError(err.message)
         }
@@ -193,15 +214,15 @@ function ScanScreen({ session, onFinished, onError }) {
     pump()
   }
 
-  async function finish() {
-    setFinishing(true)
+  async function end(fn) {
+    setEnding(true)
     onError(null)
     try {
-      await finishSession(session.id)
+      await fn(session.id)
       onFinished(session.id)
     } catch (err) {
       onError(err.message)
-      setFinishing(false)
+      setEnding(false)
     }
   }
 
@@ -216,7 +237,7 @@ function ScanScreen({ session, onFinished, onError }) {
             <h2 className="mono">{session.location}</h2>
           </div>
           <div className="muted small">
-            Query expects {nf.format(session.expected_count)} full case
+            Query expects {nf.format(session.expected_count)} case
             {session.expected_count === 1 ? '' : 's'}
             <br />
             started {when(session.started_at)} by {session.started_by}
@@ -242,8 +263,8 @@ function ScanScreen({ session, onFinished, onError }) {
         </form>
 
         {last && (
-          <div className={`ccresult ${RESULTS[last.result].tone}`}>
-            <strong>{RESULTS[last.result].label}</strong>
+          <div className={`ccresult ${RESULTS[bucketOf(last)].tone}`}>
+            <strong>{RESULTS[bucketOf(last)].label}</strong>
             {last.already_scanned && <em> · already scanned</em>}
             <span className="mono ccresultcase">{last.case_no}</span>
             <span className="small">{describeScan(last)}</span>
@@ -253,8 +274,17 @@ function ScanScreen({ session, onFinished, onError }) {
         <Counters counts={counts} expected={session.expected_count} />
 
         <div className="ccactions">
-          <button type="button" onClick={finish} disabled={finishing}>
-            {finishing ? 'Finishing...' : 'Finish and see the result'}
+          <button type="button" onClick={() => end(finishSession)} disabled={ending}>
+            {ending ? 'Finishing...' : 'Finish and see the result'}
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => end(cancelSession)}
+            disabled={ending}
+            title="Abandon this count and let someone else take the location"
+          >
+            Cancel
           </button>
           {busy && <span className="muted small">Saving...</span>}
         </div>
@@ -277,8 +307,8 @@ function ScanScreen({ session, onFinished, onError }) {
                   <tr key={s.case_no}>
                     <td className="mono">{s.case_no}</td>
                     <td>
-                      <span className={`pill ${RESULTS[s.result].tone}`}>
-                        {RESULTS[s.result].label}
+                      <span className={`pill ${RESULTS[bucketOf(s)].tone}`}>
+                        {RESULTS[bucketOf(s)].label}
                       </span>
                     </td>
                     <td className="small">{describeScan(s)}</td>
@@ -294,8 +324,98 @@ function ScanScreen({ session, onFinished, onError }) {
 }
 
 // ---------------------------------------------------------------------------
-// The result
+// The follow-up on one discrepancy: reason, action, done.
+// Mirrors the Historic / DO / Status columns of the workbook.
 // ---------------------------------------------------------------------------
+
+function FollowupRow({ row, onError }) {
+  const [reason, setReason] = useState(row.reason)
+  const [action, setAction] = useState(row.action || suggestedAction(row.bucket))
+  const [done, setDone] = useState(row.done)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  const save = useCallback(
+    async (next) => {
+      if (row.id == null) return
+      setSaving(true)
+      try {
+        await saveFollowup(row.id, { reason, action, done, ...next })
+        setSaved(true)
+        setTimeout(() => setSaved(false), 1500)
+      } catch (err) {
+        onError(err.message)
+      } finally {
+        setSaving(false)
+      }
+    },
+    [row.id, reason, action, done, onError]
+  )
+
+  return (
+    <tr className={done ? 'ccdone' : undefined}>
+      <td className="mono ccbreak">{row.case_no}</td>
+      <td>
+        <span className={`pill ${RESULTS[row.bucket].tone}`}>{RESULTS[row.bucket].label}</span>
+      </td>
+      <td className="small">
+        {row.bucket === 'not_checked'
+          ? 'Expected here, never scanned'
+          : describeScan({ ...row, result: row.bucket === 'opened_mismatch' ? 'match' : row.bucket })}
+      </td>
+      {row.id == null ? (
+        // A case nobody scanned has no scan row to attach a decision to. It is
+        // a list to go and look at, not work that can be recorded yet.
+        <td colSpan={3} className="muted small">
+          Check this case later
+        </td>
+      ) : (
+        <>
+          <td>
+            <input
+              type="text"
+              className="ccreason"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              onBlur={() => save({})}
+              placeholder="Reason"
+              spellCheck={false}
+            />
+          </td>
+          <td>
+            <select
+              value={action}
+              onChange={(e) => {
+                setAction(e.target.value)
+                save({ action: e.target.value })
+              }}
+            >
+              <option value="">Choose...</option>
+              {ACTIONS.map((a) => (
+                <option key={a.value} value={a.value}>
+                  {a.label}
+                </option>
+              ))}
+            </select>
+          </td>
+          <td className="num">
+            <input
+              type="checkbox"
+              checked={done}
+              onChange={(e) => {
+                setDone(e.target.checked)
+                save({ done: e.target.checked })
+              }}
+              aria-label="Done"
+            />
+            {saving && <span className="muted small"> ...</span>}
+            {saved && <span className="ok small"> ok</span>}
+          </td>
+        </>
+      )}
+    </tr>
+  )
+}
 
 function DoneScreen({ sessionId, onNew, onError }) {
   const [summary, setSummary] = useState(null)
@@ -328,26 +448,32 @@ function DoneScreen({ sessionId, onNew, onError }) {
   if (loading) return <p className="muted">Working out the result...</p>
   if (!summary) return null
 
-  const counts = summarise(
-    [
-      ...Array(Number(summary.matched)).fill({ result: 'match' }),
-      ...Array(Number(summary.wrong_location)).fill({ result: 'wrong_location' }),
-      ...Array(Number(summary.not_in_query)).fill({ result: 'not_in_query' }),
-    ],
-    Number(summary.not_checked)
-  )
+  const counts = {
+    clean_match: Number(summary.clean_match),
+    opened_mismatch: Number(summary.opened_mismatch),
+    wrong_location: Number(summary.wrong_location),
+    not_in_query: Number(summary.not_in_query),
+    not_checked: Number(summary.not_checked),
+    scanned: Number(summary.scanned),
+  }
+  counts.problems = counts.scanned - counts.clean_match
   const pct = accuracy(counts)
+  const work = rows.filter((r) => r.bucket !== 'not_checked')
+  const later = rows.filter((r) => r.bucket === 'not_checked')
 
   return (
     <>
       <div className="card">
         <div className="cchead">
           <div>
-            <span className="muted small">Counted</span>
+            <span className="muted small">
+              {summary.cancelled_at ? 'Cancelled' : 'Counted'}
+            </span>
             <h2 className="mono">{summary.location}</h2>
           </div>
           <div className="muted small">
-            {when(summary.started_at)} &rarr; {when(summary.finished_at)}
+            {when(summary.started_at)} &rarr;{' '}
+            {when(summary.finished_at ?? summary.cancelled_at)}
             <br />
             by {summary.started_by}
           </div>
@@ -355,8 +481,9 @@ function DoneScreen({ sessionId, onNew, onError }) {
 
         {pct !== null && (
           <p className="ccaccuracy">
-            <strong>{pct.toFixed(1)}%</strong> of this location was exactly where Query
-            said it was.
+            <strong>{pct.toFixed(1)}%</strong> accuracy &mdash;{' '}
+            {nf.format(counts.clean_match)} of {nf.format(counts.scanned)} scanned cases
+            were completely right.
           </p>
         )}
 
@@ -371,41 +498,58 @@ function DoneScreen({ sessionId, onNew, onError }) {
 
       <div className="card">
         <h3>
-          {rows.length === 0
-            ? 'Nothing to fix - everything matched'
-            : `${nf.format(rows.length)} thing${rows.length === 1 ? '' : 's'} to look at`}
+          {work.length === 0
+            ? 'Nothing to adjust'
+            : `${nf.format(work.length)} adjustment${work.length === 1 ? '' : 's'} to make`}
         </h3>
-        {rows.length > 0 && (
+        {work.length > 0 && (
           <div className="tablewrap">
-            <table>
+            <table className="ccwork">
               <thead>
                 <tr>
                   <th>Case No</th>
                   <th>Problem</th>
                   <th>Query says</th>
+                  <th>Reason</th>
+                  <th>Action</th>
+                  <th className="num">Done</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
-                  <tr key={`${r.result}-${r.case_no}`}>
-                    <td className="mono">{r.case_no}</td>
-                    <td>
-                      <span className={`pill ${RESULTS[r.result].tone}`}>
-                        {RESULTS[r.result].label}
-                      </span>
-                    </td>
-                    <td className="small">
-                      {r.result === 'not_checked'
-                        ? 'Expected here, never scanned'
-                        : describeScan(r)}
-                    </td>
-                  </tr>
+                {work.map((r) => (
+                  <FollowupRow key={r.id ?? r.case_no} row={r} onError={onError} />
                 ))}
               </tbody>
             </table>
           </div>
         )}
       </div>
+
+      {later.length > 0 && (
+        <div className="card">
+          <h3>Need check later &mdash; {nf.format(later.length)} cases</h3>
+          <p className="muted small">
+            Query says these are here but they were never scanned. They are not
+            counted in the accuracy above, because they were never handled.
+          </p>
+          <div className="tablewrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Case No</th>
+                </tr>
+              </thead>
+              <tbody>
+                {later.map((r) => (
+                  <tr key={r.case_no}>
+                    <td className="mono ccbreak">{r.case_no}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </>
   )
 }
@@ -418,7 +562,7 @@ function RecentSessions() {
   useEffect(() => {
     let active = true
     recentSessions(10)
-      .then((r) => active && setRows(r.filter((s) => s.finished_at)))
+      .then((r) => active && setRows(r))
       .catch(() => {})
     return () => {
       active = false
@@ -435,24 +579,32 @@ function RecentSessions() {
           <thead>
             <tr>
               <th>Location</th>
+              <th>By</th>
               <th>When</th>
-              <th className="num">Match</th>
-              <th className="num">Wrong loc</th>
-              <th className="num">Not in Query</th>
+              <th className="num">True</th>
+              <th className="num">Scanned</th>
+              <th className="num">Accuracy</th>
               <th className="num">Need check</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((s) => (
-              <tr key={s.id}>
-                <td className="mono">{s.location}</td>
-                <td className="small">{when(s.started_at)}</td>
-                <td className="num">{nf.format(s.matched)}</td>
-                <td className="num">{nf.format(s.wrong_location)}</td>
-                <td className="num">{nf.format(s.not_in_query)}</td>
-                <td className="num">{nf.format(s.not_checked)}</td>
-              </tr>
-            ))}
+            {rows.map((s) => {
+              const pct = accuracy({
+                clean_match: Number(s.clean_match),
+                scanned: Number(s.scanned),
+              })
+              return (
+                <tr key={s.id}>
+                  <td className="mono">{s.location}</td>
+                  <td className="small">{s.started_by}</td>
+                  <td className="small">{when(s.started_at)}</td>
+                  <td className="num">{nf.format(s.clean_match)}</td>
+                  <td className="num">{nf.format(s.scanned)}</td>
+                  <td className="num">{pct === null ? '—' : `${pct.toFixed(0)}%`}</td>
+                  <td className="num">{nf.format(s.not_checked)}</td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -469,7 +621,8 @@ export default function CycleCountPage() {
   const fail = useCallback((msg) => setError(msg), [])
 
   // A count can outlive the tab - the phone locks, the browser is closed. Pick
-  // an unfinished session back up rather than stranding it.
+  // THIS admin's unfinished session back up rather than stranding it, and
+  // never someone else's.
   useEffect(() => {
     let active = true
     openSession()

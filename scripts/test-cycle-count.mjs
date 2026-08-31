@@ -1,18 +1,22 @@
 // The cycle count rules that do not need a database.
 //
 // The classification itself lives in Postgres (record_scan), so what is proved
-// here is everything around it: reading a scan, counting the buckets, and the
-// accuracy figure that gets reported to the warehouse.
+// here is everything around it: reading a scan, bucketing a result, the
+// accuracy figure reported to the warehouse, and the adjustment worklist.
 //
 //   node scripts/test-cycle-count.mjs
 import {
   RESULTS,
   RESULT_ORDER,
+  ACTIONS,
+  ACTION_LABEL,
+  bucketOf,
   readScan,
   summarise,
   accuracy,
   describeScan,
   reportRows,
+  suggestedAction,
 } from '../src/lib/cycleCount.js'
 import { checker } from './lib.mjs'
 
@@ -24,102 +28,175 @@ check('a normal case number', readScan('P03741331').case_no === 'P03741331',
       readScan('P03741331').case_no)
 check('empty is refused', !readScan('').ok, readScan('').error)
 check('whitespace only is refused', !readScan('   \n ').ok, 'refused')
-
-// A scanner wedge often appends a newline or carriage return.
 check('a trailing newline is trimmed', readScan('P03741331\n').case_no === 'P03741331',
       JSON.stringify(readScan('P03741331\n').case_no))
 check('a trailing CR is trimmed', readScan('P03741331\r\n').case_no === 'P03741331',
       JSON.stringify(readScan('P03741331\r\n').case_no))
 
 // 54,728 real case numbers contain spaces, so only the OUTSIDE may be trimmed.
-const spaced = readScan('  PALET OF 2026 1320&-  ')
-check('inner spaces survive', spaced.case_no === 'PALET OF 2026 1320&-', spaced.case_no)
-
+check('inner spaces survive',
+      readScan('  PALET OF 2026 1320&-  ').case_no === 'PALET OF 2026 1320&-',
+      readScan('  PALET OF 2026 1320&-  ').case_no)
 // 20,314 contain lowercase. Upper-casing would stop them matching.
 check('lowercase is preserved', readScan('umVRB230001').case_no === 'umVRB230001',
       readScan('umVRB230001').case_no)
-
 // 16 real case numbers are 3 characters or shorter, one of them just "-".
-// A scan is not a guess, so there is no minimum length.
 check('a 1-character case is still recorded', readScan('-').ok, 'accepted')
+
+console.log('\n--- bucketing: right place is not the same as right ---')
+
+// The whole point of correction 1: a case can be exactly where Query says and
+// still be wrong, because Query has it as opened when it is physically full.
+check('right place, Query agrees -> True',
+      bucketOf({ result: 'match', query_opened: false }) === 'clean_match',
+      bucketOf({ result: 'match', query_opened: false }))
+check('right place, Query says opened -> its own bucket',
+      bucketOf({ result: 'match', query_opened: true }) === 'opened_mismatch',
+      bucketOf({ result: 'match', query_opened: true }))
+check('wrong place passes through',
+      bucketOf({ result: 'wrong_location', query_opened: false }) === 'wrong_location',
+      bucketOf({ result: 'wrong_location' }))
+check('not in query passes through',
+      bucketOf({ result: 'not_in_query', query_opened: false }) === 'not_in_query',
+      bucketOf({ result: 'not_in_query' }))
+// An opened case in the WRONG place is still a wrong-place problem first.
+check('wrong place wins over the opened flag',
+      bucketOf({ result: 'wrong_location', query_opened: true }) === 'wrong_location',
+      bucketOf({ result: 'wrong_location', query_opened: true }))
 
 console.log('\n--- counting the buckets ---')
 
 const scans = [
-  { case_no: 'A', result: 'match' },
-  { case_no: 'B', result: 'match' },
-  { case_no: 'C', result: 'wrong_location' },
-  { case_no: 'D', result: 'not_in_query' },
+  { case_no: 'A', result: 'match', query_opened: false },
+  { case_no: 'B', result: 'match', query_opened: false },
+  { case_no: 'C', result: 'match', query_opened: true },
+  { case_no: 'D', result: 'wrong_location', query_opened: false },
+  { case_no: 'E', result: 'not_in_query', query_opened: false },
 ]
 const c = summarise(scans, 3)
 
-check('matches counted', c.match === 2, String(c.match))
+check('clean matches counted', c.clean_match === 2, String(c.clean_match))
+check('opened mismatches counted', c.opened_mismatch === 1, String(c.opened_mismatch))
 check('wrong location counted', c.wrong_location === 1, String(c.wrong_location))
 check('not in query counted', c.not_in_query === 1, String(c.not_in_query))
 check('not checked passed through', c.not_checked === 3, String(c.not_checked))
-check('scanned excludes never-scanned', c.scanned === 4, String(c.scanned))
-check('problems is everything but a match', c.problems === 5, String(c.problems))
-check('total is match plus problems', c.total === 7, String(c.total))
+check('scanned is everything handled', c.scanned === 5, String(c.scanned))
+check('not checked is NOT in scanned', c.scanned === scans.length, String(c.scanned))
+check('problems is scanned minus clean', c.problems === 3, String(c.problems))
 
-const empty = summarise([], 0)
-check('an empty count has no total', empty.total === 0, String(empty.total))
+console.log('\n--- accuracy matches their spreadsheet ---')
 
-console.log('\n--- accuracy ---')
+// Recap sheet, 2026-08-03: 43 TRUE of 75 counted = 57.3%. Reproduce it exactly,
+// or the new numbers will not be comparable with their own history.
+const theirDay = summarise(
+  [
+    ...Array(43).fill({ result: 'match', query_opened: false }),
+    ...Array(32).fill({ result: 'wrong_location', query_opened: false }),
+  ],
+  0
+)
+check('their 43 of 75 is 57.3%', Math.abs(accuracy(theirDay) - 57.333) < 0.01,
+      `${accuracy(theirDay).toFixed(3)}%`)
+check('and the denominator is 75', theirDay.scanned === 75, String(theirDay.scanned))
 
-check('2 of 7 is 28.6%', Math.abs(accuracy(c) - 28.571) < 0.01, accuracy(c).toFixed(3))
-check('all matched is 100%', accuracy(summarise([{ result: 'match' }], 0)) === 100, '100')
+// "Need check later" must NOT drag the percentage down - those cases were
+// never handled, so they cannot be right or wrong yet.
+const withUnchecked = summarise(
+  [
+    ...Array(43).fill({ result: 'match', query_opened: false }),
+    ...Array(32).fill({ result: 'wrong_location', query_opened: false }),
+  ],
+  40
+)
+check('40 unchecked cases do not change the accuracy',
+      accuracy(withUnchecked) === accuracy(theirDay),
+      `${accuracy(withUnchecked).toFixed(3)}% vs ${accuracy(theirDay).toFixed(3)}%`)
+check('but they are still reported', withUnchecked.not_checked === 40,
+      String(withUnchecked.not_checked))
 
-// 100% of nothing reads as a perfect score and is not one.
-check('nothing counted is null, not 100%', accuracy(empty) === null, String(accuracy(empty)))
+// An opened-in-Query case counts against accuracy - it is not a pass.
+const oneOpened = summarise([{ result: 'match', query_opened: true }], 0)
+check('a Query-says-opened case scores 0%', accuracy(oneOpened) === 0,
+      String(accuracy(oneOpened)))
 
-// A location where everything was missing must not flatter itself.
-const allMissing = summarise([], 5)
-check('all missing is 0%', accuracy(allMissing) === 0, String(accuracy(allMissing)))
+check('nothing scanned is null, not 100%', accuracy(summarise([], 0)) === null,
+      String(accuracy(summarise([], 0))))
+check('nothing scanned stays null even with unchecked cases',
+      accuracy(summarise([], 9)) === null, String(accuracy(summarise([], 9))))
 
 console.log('\n--- describing a scan ---')
 
-check('a plain match', describeScan({ result: 'match', system_locations: ['A'] }) === 'Here',
+check('a plain match',
+      describeScan({ result: 'match', system_locations: ['A'], query_opened: false }) === 'Here',
       describeScan({ result: 'match', system_locations: ['A'] }))
-
-// 381 of 108,778 full cases sit in more than one location, so a match can be
-// correct here AND elsewhere at the same time.
+// 381 of 108,778 full cases sit in more than one location.
 check('a match that is also elsewhere',
       describeScan({ result: 'match', system_locations: ['A', 'B'] }) ===
         'Here, and in 1 other location',
       describeScan({ result: 'match', system_locations: ['A', 'B'] }))
-check('plural for several others',
-      describeScan({ result: 'match', system_locations: ['A', 'B', 'C'] }).includes('2 other locations'),
-      describeScan({ result: 'match', system_locations: ['A', 'B', 'C'] }))
-
+check('the opened flag is spelled out',
+      describeScan({ result: 'match', system_locations: ['A'], query_opened: true })
+        .includes('OPENED'),
+      describeScan({ result: 'match', system_locations: ['A'], query_opened: true }))
 check('wrong location names where it should be',
       describeScan({ result: 'wrong_location', system_locations: ['LHO-NN24-301'] }) ===
         'Query says LHO-NN24-301',
       describeScan({ result: 'wrong_location', system_locations: ['LHO-NN24-301'] }))
-check('not in query says so',
-      describeScan({ result: 'not_in_query', system_locations: [] }) === 'Not in Query',
-      describeScan({ result: 'not_in_query', system_locations: [] }))
 
-console.log('\n--- the report ---')
+console.log('\n--- the adjustment worklist ---')
 
-const rows = reportRows(scans, ['E', 'F'])
-check('matches are left out', rows.every((r) => r.result !== 'match'),
-      rows.map((r) => r.result).join(','))
-check('every problem appears', rows.length === 4, String(rows.length))
-check('not in query is first', rows[0].result === 'not_in_query', rows[0].result)
-check('wrong location is next', rows[1].result === 'wrong_location', rows[1].result)
-check('need check last', rows.at(-1).result === 'not_checked', rows.at(-1).result)
-check('never-scanned cases are included',
-      rows.filter((r) => r.result === 'not_checked').map((r) => r.case_no).join(',') === 'E,F',
-      rows.filter((r) => r.result === 'not_checked').map((r) => r.case_no).join(','))
+const withIds = scans.map((s, i) => ({ ...s, id: i + 1 }))
+const rows = reportRows(withIds, ['X', 'Y'])
 
-const clean = reportRows([{ case_no: 'A', result: 'match' }], [])
-check('a perfect count has an empty report', clean.length === 0, String(clean.length))
+check('clean matches are left out', rows.every((r) => r.bucket !== 'clean_match'),
+      rows.map((r) => r.bucket).join(','))
+check('every problem appears', rows.length === 5, String(rows.length))
+check('not in query is first', rows[0].bucket === 'not_in_query', rows[0].bucket)
+check('the crucial finding is second', rows[1].bucket === 'opened_mismatch', rows[1].bucket)
+check('wrong location next', rows[2].bucket === 'wrong_location', rows[2].bucket)
+check('need check last', rows.at(-1).bucket === 'not_checked', rows.at(-1).bucket)
 
-console.log('\n--- the four buckets are all named ---')
-check('every result has a label and tone',
+// A never-scanned case has no scan row, so no decision can be attached to it.
+const later = rows.filter((r) => r.bucket === 'not_checked')
+check('never-scanned rows carry no id', later.every((r) => r.id === null),
+      later.map((r) => String(r.id)).join(','))
+check('scanned problems all carry an id',
+      rows.filter((r) => r.bucket !== 'not_checked').every((r) => r.id != null), 'ok')
+
+check('a perfect count has an empty worklist',
+      reportRows([{ id: 1, case_no: 'A', result: 'match', query_opened: false }], []).length === 0,
+      '0')
+
+console.log('\n--- actions ---')
+
+check('the four actions the user asked for',
+      ACTIONS.map((a) => a.value).join(',') === 'put_away,shortage,profit,shortage_profit',
+      ACTIONS.map((a) => a.value).join(','))
+check('shortage + profit is labelled properly',
+      ACTION_LABEL.shortage_profit === 'Shortage + Profit', ACTION_LABEL.shortage_profit)
+
+// A case Query has as opened but was found full needs taking off and putting
+// back - the pair.
+check('opened mismatch suggests shortage + profit',
+      suggestedAction('opened_mismatch') === 'shortage_profit',
+      suggestedAction('opened_mismatch'))
+check('wrong location suggests put away',
+      suggestedAction('wrong_location') === 'put_away', suggestedAction('wrong_location'))
+check('not in query suggests profit',
+      suggestedAction('not_in_query') === 'profit', suggestedAction('not_in_query'))
+check('nothing is suggested for an unscanned case',
+      suggestedAction('not_checked') === '', `"${suggestedAction('not_checked')}"`)
+check('every suggestion is a real action',
+      ['wrong_location', 'not_in_query', 'opened_mismatch']
+        .every((b) => ACTIONS.some((a) => a.value === suggestedAction(b))), 'ok')
+
+console.log('\n--- the five buckets are all named ---')
+check('every bucket has a label and tone',
       RESULT_ORDER.every((k) => RESULTS[k]?.label && RESULTS[k]?.tone),
       RESULT_ORDER.join(', '))
-check('the fourth bucket is the "need check later" one',
+check('True is named as in their workbook', RESULTS.clean_match.label === 'True',
+      RESULTS.clean_match.label)
+check('the fourth bucket is "need check later"',
       RESULTS.not_checked.label === 'Need check later', RESULTS.not_checked.label)
 
 report()

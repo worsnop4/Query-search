@@ -1117,3 +1117,55 @@ input[type='file'] {
 .pill.warn  { background: var(--warn-bg);  border-color: var(--warn-border);  color: var(--warn-text); }
 .pill.bad   { background: var(--error-bg); border-color: var(--error-border); color: var(--error-text); }
 .pill.muted { color: var(--muted); }
+
+/* Five buckets now, not four. */
+.ccounts.five {
+  grid-template-columns: repeat(5, 1fr);
+}
+
+@media (max-width: 780px) {
+  .ccounts.five {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 520px) {
+  .ccounts.five {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* The adjustment worklist: reason, action and a done tick per discrepancy. */
+.ccwork td,
+.ccwork th {
+  vertical-align: middle;
+}
+
+.ccreason {
+  width: 100%;
+  min-width: 110px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.ccreason:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ccdone {
+  opacity: 0.55;
+}
+
+.ccbreak {
+  word-break: break-all;
+  max-width: 320px;
+}
+
+.ok {
+  color: var(--ok-text);
+}

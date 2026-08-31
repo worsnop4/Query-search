@@ -17,8 +17,8 @@ import { supabase } from './supabase'
 export async function searchLocations(term, limit = 25) {
   let q = supabase
     .from('count_locations')
-    .select('location, full_cases')
-    .order('full_cases', { ascending: false })
+    .select('location, cases, opened_cases')
+    .order('cases', { ascending: false })
     .limit(limit)
 
   const t = String(term ?? '').trim()
@@ -28,6 +28,21 @@ export async function searchLocations(term, limit = 25) {
 
   const { data, error } = await q
   if (error) throw new Error(`Could not load locations: ${error.message}`)
+  return data ?? []
+}
+
+/**
+ * Locations being counted right now, and by whom.
+ *
+ * One per open session, so there are only ever a handful - fetched whole and
+ * matched against the picker rather than joined server-side, which would have
+ * meant exposing who is counting to `anon` through count_locations.
+ */
+export async function currentLocks() {
+  const { data, error } = await supabase
+    .from('cycle_count_locks')
+    .select('session_id, location, started_by, started_by_uid, started_at')
+  if (error) throw new Error(`Could not check locations: ${error.message}`)
   return data ?? []
 }
 
@@ -64,6 +79,28 @@ export async function finishSession(sessionId) {
   return Array.isArray(data) ? data[0] : data
 }
 
+/** Abandon a count, releasing the location for someone else. */
+export async function cancelSession(sessionId) {
+  const { data, error } = await supabase.rpc('cancel_cycle_count', {
+    p_session_id: sessionId,
+  })
+  if (error) throw new Error(error.message)
+  return Array.isArray(data) ? data[0] : data
+}
+
+/** The reason / action / done follow-up on one discrepancy. */
+export async function saveFollowup(scanId, { reason, action, done, remark }) {
+  const { data, error } = await supabase.rpc('set_scan_followup', {
+    p_scan_id: scanId,
+    p_reason: reason ?? null,
+    p_action: action ?? null,
+    p_done: !!done,
+    p_remark: remark ?? null,
+  })
+  if (error) throw new Error(error.message)
+  return Array.isArray(data) ? data[0] : data
+}
+
 /** Case numbers Query expected here that were never scanned. */
 export async function notCheckedCases(sessionId) {
   const { data, error } = await supabase.rpc('cycle_count_not_checked', {
@@ -95,7 +132,9 @@ export async function sessionScans(sessionId) {
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
       .from('cycle_count_scan')
-      .select('case_no, result, system_locations, scanned_at')
+      .select(
+        'id, case_no, result, system_locations, query_opened, reason, action, done, remark, scanned_at'
+      )
       .eq('session_id', sessionId)
       .order('scanned_at')
       .order('id')
@@ -112,18 +151,31 @@ export async function recentSessions(limit = 20) {
   const { data, error } = await supabase
     .from('cycle_count_summary')
     .select('*')
+    .not('finished_at', 'is', null)
     .order('started_at', { ascending: false })
     .limit(limit)
   if (error) throw new Error(error.message)
   return data ?? []
 }
 
-/** An unfinished session, so a dropped phone does not strand the count. */
+/**
+ * THIS user's unfinished session, so a dropped phone does not strand a count.
+ *
+ * Scoped to the signed-in admin, which it was not before: two admins count
+ * different locations at the same time, and resuming "the newest open session"
+ * would have dropped the second one straight into the first one's count.
+ */
 export async function openSession() {
+  const { data: auth } = await supabase.auth.getUser()
+  const uid = auth?.user?.id
+  if (!uid) return null
+
   const { data, error } = await supabase
     .from('cycle_count_summary')
     .select('*')
     .is('finished_at', null)
+    .is('cancelled_at', null)
+    .eq('started_by_uid', uid)
     .order('started_at', { ascending: false })
     .limit(1)
   if (error) throw new Error(error.message)

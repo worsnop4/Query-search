@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { parseInventoryFiles, parseMasterDataFiles } from '../lib/parse'
 import { replaceTable, INVENTORY_TARGET, MASTER_TARGET } from '../lib/upload'
 import {
@@ -722,6 +723,29 @@ export default function AdminPage() {
       ))}
 
       <DownloadCard blockedBy={uploaderOf('inventory')?.display_name ?? null} />
+
+      <CycleCountCard />
+    </div>
+  )
+}
+
+// The only way into the cycle count. Deliberately not in the top bar: the
+// search page is public and belongs to the operation team, and counting is an
+// admin job.
+function CycleCountCard() {
+  return (
+    <div className="card">
+      <h2>Cycle count</h2>
+      <p className="muted small">
+        Scan one location and compare it against Query. Two admins can count
+        different locations at the same time; a location being counted is
+        locked until that count is finished.
+      </p>
+      <div className="ccactions">
+        <Link className="btn" to="/cycle-count">
+          Open cycle count
+        </Link>
+      </div>
     </div>
   )
 }

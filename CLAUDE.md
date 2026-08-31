@@ -25,7 +25,7 @@ real data and is not obvious from the code.
 | Partial search by last 4 digits | **Working, verified** — `06_partial_search.sql` is applied |
 | Search by case number | **Working** — `07_case_search.sql` is applied; 183ms vs a 456ms un-indexed control |
 | Vercel deploy | Live, auto-deploys from `main` |
-| Cycle count | **Built** — needs `08_cycle_count.sql`. Scan + 4 buckets done; adjustment file and statistics not started |
+| Cycle count | **Built** — needs `08_cycle_count.sql` **and** `09_cycle_count_v2.sql`. Scan, 5 buckets, location lock and the reason/action worklist done; adjustment file and statistics not started |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Not started** — has open questions, see below |
 
@@ -315,33 +315,68 @@ at the bottom of `setup.sql`.
 area buckets matched Excel's own formula output exactly. Zero mismatches. Don't
 casually "fix" this logic; re-verify if you touch it.
 
-### Cycle count: one location, full cases, four buckets
+### Cycle count: one location, EVERY case, five buckets
 
-Settled with the user 31 Aug 2026, and each answer narrowed the design a lot:
+Settled with the user 31 Aug 2026, then corrected by them after they supplied
+the real workbook (`D:\Daily\Cycle Count\Spot check Augst.xlsm`). The
+corrections are in `09_cycle_count_v2.sql`; `08` alone is wrong.
 
 - **Scanned with a mobile barcode scanner**, not typed. So `/cycle-count` is a
   phone-first screen: the scan box is the biggest target on it, keeps focus
   after every scan, and submits on Enter — a wedge scanner types the text and
   sends Enter, so losing focus silently drops scans.
-- **One location per session.**
-- **Full cases only.** Opened cases are handled with another tool. The expected
-  list is therefore `is_case_opened = 'No'`, which removes **32.4%** of the
-  case+location pairs — without that filter a third of every location would
-  report as "not checked" on every single count.
-- **Only location matters.** No quantity counting.
-- The fourth bucket is the user's own words: *"on query but not checked = need
-  check later"*.
+- **One location per session**, and an unfinished session **locks** it. Two
+  admins count different locations at the same time; the same location twice
+  would be two people counting the same boxes.
+- **EVERY case at the location, opened or not.** `08` filtered to
+  `is_case_opened = 'No'` and that was wrong. In the user's words: *"i do the
+  cc today, actual case not open still full case, but after compare to query
+  the case has been open. that the crucial founded."* A case found physically
+  full while Query has it as opened needs a **shortage + profit** adjustment,
+  and filtering those rows out meant it could never be found.
+- **Only location matters.** No quantity counting — confirmed by the workbook,
+  where Part number and Qty are empty in all 606 rows.
+- The fifth bucket is the user's own words: *"on query but not checked = need
+  check later"* — reported as a count and a list, never folded into accuracy.
 
-Sized before building: 4,286 locations hold at least one full case, **median 8
-cases, p75 25, p90 46**. The ten biggest are not real racks — `NEED-CHECK-CASE`
-8,666, `TRANSIT` 3,194, `TRANSIT-HR` 2,573.
+**Accuracy is their formula, deliberately.** Recap sheet, 2026-08-03: 43 TRUE
+of 75 counted = 57.3%. The denominator is what was physically scanned;
+"need check" is **not** in it, because those cases were never handled and
+cannot be right or wrong yet. `scripts/test-cycle-count.mjs` reproduces that
+exact figure so new numbers stay comparable with their history.
 
-**Why there are tables and not just a screen that adds up.** Three buckets come
-from the scans, but the fourth — *expected here, never scanned* — is everything
-that did **not** happen. It cannot be derived from the scans alone. So
+Sized before building. Including opened cases is 48% more case+location pairs
+across the warehouse — but in the 16 areas they actually count it is nearly
+free: 15 have **zero** opened cases and `TRANSIT` has 58 of 3,252. Per
+location, all cases: **median 3, p75 13, p90 32, max 8,666**.
+
+**Validated against their 606 real rows**: the rule "actual location == query
+location" reproduces every one of the human True/False verdicts, zero
+disagreements.
+
+What the workbook also told us:
+
+- Only **two** outcomes were ever recorded (388 True, 218 False). "Not in
+  Query" was never used once, and the `Need check` column exists but is always
+  empty. Three of our five buckets are new capability, so old numbers will not
+  line up with new ones.
+- The follow-up columns `Historic` / `DO` / `Status` are a **worklist, not an
+  export**: a reason, an action and a done tick per discrepancy. Actions are
+  the user's four — put away, shortage, profit, shortage + profit.
+- Their `Settings` area list has 23 entries and **7 no longer exist** in
+  inventory (`REC-TRANSIT-05..08`, `TRANSIT B05`, `TRANSIT C04`,
+  `TRANSIT EX SOR5`). Every location they actually used does exist.
+- `is_case_opened` is per **row**, not per case: 4 case+location pairs carry
+  both Yes and No. The rule is "any row opened means opened", which raises the
+  question rather than burying it.
+
+**Why there are tables and not just a screen that adds up.** Four buckets come
+from the scans, but *expected here, never scanned* is everything that did
+**not** happen. It cannot be derived from the scans alone. So
 `start_cycle_count()` copies the expected case numbers into
 `cycle_count_expected` before counting starts, and `record_scan()` stores the
-system location it saw **at the moment of the scan**.
+system location **and Query's opened flag** as they were at the moment of the
+scan.
 
 That freezing is not optional: `swap_inventory()` truncates and re-inserts, so
 a session started in the morning and finished after lunch would otherwise be
@@ -366,6 +401,12 @@ Other decisions worth keeping:
 - Scans are **queued and sent one at a time**. A wedge scanner can fire faster
   than a round trip, and a silently dropped scan is the one failure a counter
   would never notice.
+- **Sessions belong to a user.** `started_by_uid` is `auth.uid()`, not just a
+  display name. `08` stored only the name, so `openSession()` resumed *any*
+  unfinished session — a second admin would have been dropped straight into the
+  first admin's count. A name is not an identity.
+- **The entry point is on the admin page only**, never the top bar. The search
+  page is public and belongs to the operation team.
 - **Session timestamps are correct.** They come from `now()`, not from the
   imported text columns, so the 7-hour bug below does not touch them. It will
   still matter for grouping into weeks and months.
@@ -529,13 +570,14 @@ new file shape appears.
 2. **Re-check the Vercel site** — several commits have deployed since the user
    last looked at it.
 
-3. **Run `supabase/08_cycle_count.sql`.** The cycle count page cannot work
-   without it — nothing else in the app is affected.
-4. **The WMS adjustment file.** The user has an Excel template for
-   non-matching cases and will supply a sample. Deferred by them, not by us:
-   *"i want if we have done counting automatic generate adjustment we will
-   discuss later and ill give the sample."* Design so the report rows
-   (`reportRows()` in `cycleCount.js`) feed straight into it.
+3. **Run `supabase/09_cycle_count_v2.sql`.** `08` is already applied and is
+   wrong on its own — it filters the expected list to full cases, which hides
+   the opened-case discovery the count exists to make.
+4. **The WMS adjustment file.** The user will supply a sample — *"we need
+   adjustment delete form query (called shortage) and input again with full
+   case (porfit) next ill show the sample file adjustment."* The worklist rows
+   (`reportRows()` in `cycleCount.js`) already carry the reason, the chosen
+   action and the done flag, so they should feed straight into it.
 5. **Cycle count statistics per week and month.** Not started. **Fix the
    timezone below first** — this is the feature that exposes it.
 

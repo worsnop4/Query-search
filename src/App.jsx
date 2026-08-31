@@ -93,11 +93,12 @@ function TopBar() {
           </Link>
         )}
 
-        {/* Only offered once signed in: it is an admin job, and showing it to
-            everyone would just be a link to the login page. */}
-        {session && !onCount && (
-          <Link className="btn ghost" to="/cycle-count">
-            Cycle count
+        {/* Cycle count is deliberately NOT offered here. The search page is
+            public and belongs to the operation team; the count is an admin job
+            and is reached from the admin page, once signed in. */}
+        {onCount && (
+          <Link className="btn ghost" to="/admin">
+            Admin
           </Link>
         )}
 
