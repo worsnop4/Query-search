@@ -508,6 +508,18 @@ August 2026:
 
   Related ordering rule: run data backfills **before** creating any unique
   index that the old rows might violate.
+- **A SQL file applying without an error does NOT mean its functions work.**
+  PL/pgSQL parses a statement the first time it *runs*, so a broken query
+  inside a function installs perfectly and fails later, in the warehouse.
+  `record_scan()` shipped with `on conflict (session_id, case_no)` where
+  `case_no` is also one of its `returns table (...)` OUT parameters — those are
+  variables for the whole body, so the conflict target was ambiguous (`42702`).
+  A conflict target cannot be table-qualified, so the fix is a bare
+  `on conflict do nothing`.
+
+  **Qualify every column inside a function whose OUT parameters share a name
+  with a column**, and prove RPCs by calling them:
+  `scripts/test-cycle-count-live.mjs` exists precisely because this shipped.
 - **Commit messages: use `git commit -F <file>`.** PowerShell here-strings get
   mangled and split the message into pathspec errors.
 - **PowerShell variables are case-insensitive** — `$C` and `$c` are the same
@@ -544,9 +556,10 @@ exits 1.** It used to skip them and still print `ALL CHECKS PASSED`, so away
 from that one machine a broken parser was indistinguishable from a working one
 — do not reintroduce a silent skip.
 
-`scripts/test-presence.mjs` needs two admin accounts, passed as
-`ADMIN_A_EMAIL` / `ADMIN_A_PASSWORD` / `ADMIN_B_EMAIL` / `ADMIN_B_PASSWORD`.
-It never calls `swap_*()`, so live data is safe.
+`scripts/test-presence.mjs` and `scripts/test-cycle-count-live.mjs` need two
+admin accounts, passed as `ADMIN_A_EMAIL` / `ADMIN_A_PASSWORD` /
+`ADMIN_B_EMAIL` / `ADMIN_B_PASSWORD`. Neither calls `swap_*()`, so live data is
+safe; the cycle count one opens two sessions and cancels them in a `finally`.
 
 `scripts/inspect-raw.mjs` and `scripts/dupcheck.mjs` are diagnostic, for when a
 new file shape appears.
