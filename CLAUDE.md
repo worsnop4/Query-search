@@ -495,6 +495,19 @@ August 2026:
 - **SheetJS must come from the SheetJS CDN, not npm.** npm's `xlsx` is stuck at
   0.18.5 (2022) with known CVEs. Installed as
   `npm install https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`.
+- **`create or replace` cannot change a SHAPE.** Hit twice on this project, and
+  it fails at run time in the SQL editor, not at review:
+  - a **view** whose columns are renamed or reordered → `42P16`
+    (`search_results`, then `cycle_count_summary`)
+  - a **function** whose return type or `returns table (...)` columns change →
+    `42P13` (`record_scan` gaining a column)
+
+  `drop ... if exists` first. **Dropping a function drops its GRANTs**, so
+  every `grant execute` must be reapplied in the same file — a lost grant fails
+  closed and the feature simply stops working for signed-in users.
+
+  Related ordering rule: run data backfills **before** creating any unique
+  index that the old rows might violate.
 - **Commit messages: use `git commit -F <file>`.** PowerShell here-strings get
   mangled and split the message into pathspec errors.
 - **PowerShell variables are case-insensitive** — `$C` and `$c` are the same

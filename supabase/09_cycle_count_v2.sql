@@ -79,6 +79,17 @@ begin
   end if;
 end $$;
 
+-- Close anything 08 left open, BEFORE the unique index below is built.
+--
+-- 08 stored no owner, so a session already open belongs to nobody and can
+-- never be resumed or cancelled through the app. Two of them on one location
+-- would also make the index fail to build, which is why this runs first.
+update public.cycle_count_session
+   set cancelled_at = now()
+ where started_by_uid is null
+   and finished_at is null
+   and cancelled_at is null;
+
 -- One open session per location. A partial unique index rather than a plain
 -- one, so finished and cancelled sessions can pile up on the same location for
 -- as long as the warehouse keeps counting it.
@@ -88,7 +99,14 @@ create unique index if not exists cycle_count_one_open_per_location
 
 -- ---------------------------------------------------------------------------
 -- Open a session - now with a lock and an owner
+--
+-- Dropped rather than replaced: it returns public.cycle_count_session, whose
+-- row type just gained two columns, and `create or replace function` cannot
+-- change a return type. Dropping loses the grants from 08, so they are all
+-- reapplied at the bottom of this file.
 -- ---------------------------------------------------------------------------
+
+drop function if exists public.start_cycle_count(text);
 
 create or replace function public.start_cycle_count(p_location text)
 returns public.cycle_count_session
@@ -158,7 +176,13 @@ $$;
 
 -- ---------------------------------------------------------------------------
 -- Record one scan - now also reporting what Query says about the case state
+--
+-- Must be dropped first: it gained a `query_opened` OUT column, and the OUT
+-- parameters ARE the return type, so `create or replace` refuses it with
+-- 42P13. Same reason as start_cycle_count above.
 -- ---------------------------------------------------------------------------
+
+drop function if exists public.record_scan(uuid, text);
 
 create or replace function public.record_scan(p_session_id uuid, p_case_no text)
 returns table (
@@ -286,6 +310,42 @@ end;
 $$;
 
 -- ---------------------------------------------------------------------------
+-- Finish a session
+--
+-- Redefined from 08 for two reasons: it did not know about cancelled_at, so a
+-- cancelled count could still be "finished"; and it checked no ownership, so
+-- any signed-in admin could close someone else's count and release a location
+-- out from under them.
+-- ---------------------------------------------------------------------------
+
+create or replace function public.finish_cycle_count(p_session_id uuid)
+returns public.cycle_count_session
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  s public.cycle_count_session;
+begin
+  if auth.uid() is null then
+    raise exception 'Sign in first.';
+  end if;
+
+  update public.cycle_count_session
+     set finished_at = now()
+   where id = p_session_id
+     and finished_at is null and cancelled_at is null
+     and started_by_uid = auth.uid()
+  returning * into s;
+
+  if s.id is null then
+    raise exception 'That is not an open count of yours.';
+  end if;
+  return s;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- The reason / action / done follow-up, from the workbook's Historic, DO and
 -- Status columns
 -- ---------------------------------------------------------------------------
@@ -330,9 +390,16 @@ $$;
 -- clean_match is the workbook's TRUE: right place AND Query agrees about the
 -- case state. A case found full where Query says opened is not a pass - it is
 -- the discovery the count exists to make, and it needs an adjustment.
+--
+-- DROPPED first, not replaced. `create or replace view` can only APPEND
+-- columns - it cannot rename or reorder them - and this adds cancelled_at and
+-- started_by_uid in the middle. Replacing it fails with 42P16, exactly as the
+-- search_results view did earlier in this project.
 -- ---------------------------------------------------------------------------
 
-create or replace view public.cycle_count_summary as
+drop view if exists public.cycle_count_summary;
+
+create view public.cycle_count_summary as
 select
   s.id,
   s.location,
@@ -385,26 +452,37 @@ select
 from public.inventory i
 group by i.location;
 
-grant select on public.count_locations   to anon, authenticated;
-grant select on public.cycle_count_locks to authenticated;
+grant select on public.count_locations     to anon, authenticated;
+grant select on public.cycle_count_locks   to authenticated;
 grant select on public.cycle_count_summary to authenticated;
 
-revoke all on function public.cancel_cycle_count(uuid) from public, anon;
+-- start_cycle_count and record_scan were DROPPED above to change their return
+-- types, which took 08's grants with them. Reapply every one, not just the new
+-- functions - a dropped grant fails closed, so the page would simply stop
+-- working for a signed-in admin.
+revoke all on function public.start_cycle_count(text)   from public, anon;
+revoke all on function public.record_scan(uuid, text)   from public, anon;
+revoke all on function public.finish_cycle_count(uuid)  from public, anon;
+revoke all on function public.cancel_cycle_count(uuid)  from public, anon;
 revoke all on function public.set_scan_followup(bigint, text, text, boolean, text)
   from public, anon;
 
+grant execute on function public.start_cycle_count(text)  to authenticated;
+grant execute on function public.record_scan(uuid, text)  to authenticated;
+grant execute on function public.finish_cycle_count(uuid) to authenticated;
 grant execute on function public.cancel_cycle_count(uuid) to authenticated;
 grant execute on function public.set_scan_followup(bigint, text, text, boolean, text)
   to authenticated;
 
 
 -- ============================================================================
--- Backfill: 08 stored no owner. Any session already open belongs to nobody, so
--- it can never be resumed or cancelled through the app. Close them.
+-- CHECK - all five should come back, and start_cycle_count / record_scan must
+-- show EXECUTE for `authenticated` or the page will fail once signed in.
 -- ============================================================================
-
-update public.cycle_count_session
-   set cancelled_at = now()
- where started_by_uid is null
-   and finished_at is null
-   and cancelled_at is null;
+-- select p.proname,
+--        has_function_privilege('authenticated', p.oid, 'execute') as authed
+--   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+--  where n.nspname = 'public'
+--    and p.proname in ('start_cycle_count', 'record_scan', 'finish_cycle_count',
+--                      'cancel_cycle_count', 'set_scan_followup')
+--  order by p.proname;
