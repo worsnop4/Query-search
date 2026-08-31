@@ -169,9 +169,25 @@ textarea {
   resize: vertical;
 }
 
+/* The case number box. Scoped to .search so the login form's inputs keep
+   their own styling. Monospace and full width because case numbers run to
+   100 characters. */
+.search input[type='text'] {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 14px;
+  margin-bottom: 14px;
+}
+
 textarea:focus,
 select:focus,
-button:focus-visible {
+button:focus-visible,
+.search input[type='text']:focus {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }

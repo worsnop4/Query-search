@@ -23,6 +23,7 @@ real data and is not obvious from the code.
 | Copy search results to clipboard | **Working, verified** — TSV, all matching rows not just the page |
 | WhatsApp "notify group" after an upload | **Working** — pre-fills the message; the group is picked by hand, see below |
 | Partial search by last 4 digits | **Working** — needs `06_partial_search.sql` for the trigram index, or it is ~0.8s per search |
+| Search by case number | **Built** — needs `07_case_search.sql`, or it is ~0.8-1.4s per search |
 | Vercel deploy | Live, auto-deploys from `main` |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Not started** — has open questions, see below |
@@ -195,6 +196,55 @@ Postgres scans all ~197k rows: measured 700–1000ms per search. With it, well
 under 100ms. `scripts/test-search-terms.mjs` prints a warning if a partial
 search takes over 300ms, which is the tell that the file has not been run.
 
+### Case numbers are not part numbers, and the rules do not transfer
+
+A second box above the part numbers searches `case_no`. It looks like the same
+feature and is governed by opposite rules, all of them measured on 207,633 live
+rows / 147,090 distinct case numbers:
+
+- **Always a contains match. There is no exact mode.** The median case number is
+  **42 characters** and the longest is 100 — `PALET OF 2026
+  0213&0010007029_10003993_SMC2C4_2200.0_B16608901_740A_`. Nobody types one in
+  full; they read a fragment off the label.
+- **The input cannot be split into a list.** 54,728 case numbers contain
+  **spaces** and 4 contain **commas**, so every separator that works for part
+  numbers would cut real case numbers in half. Hence a single-line box holding
+  one fragment, not a textarea. Newline, tab and semicolon are the only safe
+  separators if a list is ever wanted.
+- **Wildcards are ESCAPED, not stripped.** The exact opposite of
+  `sanitizeTerm()`. 3,213 case numbers contain `_` and 555 contain `\`, both
+  special to ILIKE — stripping them would make those cases permanently
+  unfindable. `escapeLike()` backslash-escapes `\`, `%` and `_`. Verified
+  through PostgREST: `%SMC_C4%` raw matches **1,349** rows because `_` means
+  any character; escaped it matches **0**, which is correct.
+- **Not upper-cased.** 20,314 case numbers contain lowercase letters, and ILIKE
+  is case-insensitive anyway.
+- **`CASE_MIN` is 6, not 4.** How much the last *n* characters actually narrow
+  things, over 300 real case numbers:
+
+  ```
+   n    median rows matched    worst
+   4            291           11,903
+   6             50            2,382
+   8             29              624
+  12              7              196
+  ```
+
+  At 4 it is a browse, not a search. Do not reuse `PARTIAL_MIN`.
+- The last-4-digits trick that works for parts **does not work here**: the last
+  4 characters identify exactly one case only **2.6%** of the time, and even the
+  last 8 only reach 11.5%.
+
+The two boxes AND together. When a case fragment is present the "Not in query"
+list is **deliberately not computed** — that message means a part has no stock
+anywhere, and a part absent from *this case* is a different claim.
+
+`supabase/07_case_search.sql` is required. `inventory` never had any index on
+`case_no`, so a case search was a full sequential scan: measured 1,029ms exact
+and 1,394ms contains, against 295ms for an indexed part-number search.
+`test-search-terms.mjs` compares against the measured network floor and names
+the file if it has not been run.
+
 ### WhatsApp cannot be deep-linked to a group
 
 After a successful upload the admin gets a **Notify group on WhatsApp** button.
@@ -310,6 +360,16 @@ August 2026:
 
   Worth re-measuring after a WMS-side fix has landed: if the rate drops, the
   cleanup is working; if it does not, the diagnosis needs revisiting.
+- **Case numbers**, measured Aug 2026 over 207,633 rows: 147,090 distinct, none
+  blank. Median length **42**, max 100. 54,728 contain spaces, 20,314 contain
+  lowercase, 3,213 contain `_`, 555 contain `\`, 4 contain a comma, and none
+  contain `%`. 16 are 3 characters or shorter, one of them just `-`.
+  **A case number is not a unique location**: 2,774 (1.93%) sit in more than
+  one location, up to 18. **Nor is it one part**: 8,107 (5.65%) hold more than
+  one part number, max 705. Both matter for the Breakdown and Cycle Count.
+- **The biggest "locations" are not physical places** — `NEED-CHECK-CASE`
+  (8,824 cases), `BATTERY-SHOP` (7,760), `DUMMY` (3,926), `TRANSIT` (2,834).
+  Anything that counts or reconciles stock has to decide what to do with these.
 - **`is_case_opened`** is exactly `Yes` / `No`, no blanks.
 - **`status`** is `Available` on every row — useless as a filter.
 - **Rows per part**: median 6, 99th percentile 183, max 4,205 (part `26184917`).

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { toTsv, writeClipboard } from '../lib/clipboard'
-import { readCriteria, PARTIAL_MIN } from '../lib/searchTerms'
+import { readSearch, describeSearch } from '../lib/searchTerms'
 
 const PAGE_SIZE = 100
 
@@ -31,6 +31,13 @@ const CASE_FILTERS = [
 
 
 const nf = new Intl.NumberFormat()
+
+// What "nothing has been searched for" looks like, in the shape readSearch()
+// returns. One constant so the initial state and Clear cannot drift apart.
+const EMPTY_SEARCH = {
+  part: { mode: 'empty', parts: [] },
+  caseNo: { mode: 'empty', term: '' },
+}
 
 // "No rows found for X" is misleading when a filter is what excluded them, so
 // name the filters that are actually on.
@@ -82,6 +89,10 @@ function useZoneTypes() {
 
 export default function SearchPage() {
   const [input, setInput] = useState('')
+  // The case number box. A single line, not a textarea: case numbers cannot be
+  // pasted as a list because 54,728 of them contain spaces and 4 contain
+  // commas, so there is no separator that could be split on safely.
+  const [caseInput, setCaseInput] = useState('')
   const [caseFilter, setCaseFilter] = useState('all')
   // Empty means no zone filter at all. Any selection is a whitelist.
   const [zoneFilters, setZoneFilters] = useState([])
@@ -92,10 +103,10 @@ export default function SearchPage() {
 
   const zones = useZoneTypes()
 
-  // What the current results are FOR: either an exact list of part numbers or
-  // a partial term. Held as one object so the table, the pager and the copy
-  // button can never disagree about which of the two is in play.
-  const [criteria, setCriteria] = useState({ mode: 'empty', parts: [] })
+  // What the current results are FOR: a part-number criteria (exact list or
+  // partial term) plus an optional case-number fragment. Held as one object so
+  // the table, the pager and the copy button can never disagree about it.
+  const [criteria, setCriteria] = useState(EMPTY_SEARCH)
   const [rows, setRows] = useState([])
   const [names, setNames] = useState({})
   const [missing, setMissing] = useState([])
@@ -122,7 +133,7 @@ export default function SearchPage() {
   // The criteria the current search is for. A ref as well as state because
   // changeFilter/reload need them in the same tick that runSearch sets them,
   // before React has committed the state update.
-  const partsRef = useRef({ mode: 'empty', parts: [] })
+  const critRef = useRef(EMPTY_SEARCH)
 
   // The one place the result set is defined, so the table and the copy button
   // can never disagree about what "the result" is.
@@ -141,8 +152,23 @@ export default function SearchPage() {
 
     // Partial searches lean on the pg_trgm index from 06_partial_search.sql.
     // Without it this is a full scan of ~197k rows, roughly 0.8s per search.
-    if (criteria.mode === 'partial') q = q.ilike('part_number', `%${criteria.term}%`)
-    else q = q.in('part_number', criteria.parts)
+    //
+    // Either box may be empty - the other one then defines the whole result -
+    // so neither filter is applied unconditionally. An .in() on an empty array
+    // would match nothing and silently break a case-only search.
+    if (criteria.part.mode === 'partial') {
+      q = q.ilike('part_number', `%${criteria.part.term}%`)
+    } else if (criteria.part.mode === 'exact') {
+      q = q.in('part_number', criteria.part.parts)
+    }
+
+    // Always a contains match, on a pattern whose `_`, `%` and `\` are already
+    // escaped by readCaseTerm - those characters occur in real case numbers.
+    // Needs the trigram index from 07_case_search.sql; without it this is a
+    // sequential scan measured at 1.0-1.4s.
+    if (criteria.caseNo.mode === 'partial') {
+      q = q.ilike('case_no', criteria.caseNo.pattern)
+    }
 
     q = q.order('part_number').order('location').order('case_no').order('id')
 
@@ -197,7 +223,7 @@ export default function SearchPage() {
       const all = []
       for (let from = 0; from < total; from += COPY_PAGE) {
         const { data, error: err } = await resultQuery(
-          partsRef.current,
+          critRef.current,
           caseFilter,
           zoneFilters,
           COPY_COLUMNS.join(', ')
@@ -228,22 +254,15 @@ export default function SearchPage() {
 
   async function runSearch(e) {
     e?.preventDefault()
-    const criteria = readCriteria(input)
+    const criteria = readSearch(input, caseInput)
 
-    if (criteria.mode === 'empty') {
-      setError('Enter a part number, or at least the last 4 digits of one.')
+    if (criteria.error) {
+      setError(criteria.error)
       return
     }
-    if (criteria.mode === 'tooshort') {
+    if (criteria.part.parts.length > MAX_PARTS) {
       setError(
-        `"${criteria.parts[0]}" is too short. Type at least ${PARTIAL_MIN} ` +
-          'characters of the part number - the last 4 digits are enough.'
-      )
-      return
-    }
-    if (criteria.parts.length > MAX_PARTS) {
-      setError(
-        `That is ${nf.format(criteria.parts.length)} part numbers. ` +
+        `That is ${nf.format(criteria.part.parts.length)} part numbers. ` +
           `Please search at most ${MAX_PARTS} at a time.`
       )
       return
@@ -251,7 +270,7 @@ export default function SearchPage() {
 
     const reqId = ++reqRef.current
     const searchId = ++searchRef.current
-    partsRef.current = criteria
+    critRef.current = criteria
     setLoading(true)
     setError(null)
     setSearched(true)
@@ -267,32 +286,44 @@ export default function SearchPage() {
         setTotal(first.count)
       }
 
-      if (criteria.mode === 'partial') {
-        // Nothing was "not found" - a partial search asks which parts exist,
-        // it does not assert any. Names come from what actually matched.
+      if (criteria.part.mode !== 'exact') {
+        // Nothing was "not found" - a partial or case-only search asks which
+        // parts exist, it does not assert any. Names come from what matched.
         const nameMap = await fetchNames(first.data.map((r) => r.part_number))
         if (searchRef.current === searchId) {
           setNames(nameMap)
           setMissing([])
         }
       } else {
+        // "Not in query" means the part has no stock anywhere. With a case
+        // number also narrowing the search that claim would be false - a part
+        // can be absent from THIS case and still sit in the warehouse - so the
+        // lookup is skipped entirely rather than reported wrongly.
+        const checkMissing = criteria.caseNo.mode === 'empty'
+
         const [nameRes, foundRes] = await Promise.all([
           supabase
             .from('master_data')
             .select('part_number, part_name')
-            .in('part_number', criteria.parts),
-          supabase.rpc('found_part_numbers', { pns: criteria.parts }),
+            .in('part_number', criteria.part.parts),
+          checkMissing
+            ? supabase.rpc('found_part_numbers', { pns: criteria.part.parts })
+            : Promise.resolve({ data: null, error: null }),
         ])
         if (nameRes.error) throw nameRes.error
         if (foundRes.error) throw foundRes.error
 
         const nameMap = {}
         for (const r of nameRes.data ?? []) nameMap[r.part_number] = r.part_name
-        const found = new Set((foundRes.data ?? []).map((r) => r.part_number))
 
         if (searchRef.current === searchId) {
           setNames(nameMap)
-          setMissing(criteria.parts.filter((p) => !found.has(p)))
+          if (checkMissing) {
+            const found = new Set((foundRes.data ?? []).map((r) => r.part_number))
+            setMissing(criteria.part.parts.filter((p) => !found.has(p)))
+          } else {
+            setMissing([])
+          }
         }
       }
     } catch (err) {
@@ -306,7 +337,7 @@ export default function SearchPage() {
     }
   }
 
-  async function reload(filter, zone, pageIndex, crit = partsRef.current) {
+  async function reload(filter, zone, pageIndex, crit = critRef.current) {
     const reqId = ++reqRef.current
     setLoading(true)
     setError(null)
@@ -330,10 +361,10 @@ export default function SearchPage() {
       setTotal(count)
       setPage(pageIndex)
 
-      // A partial search discovers its part numbers, so page 2 may hold parts
-      // page 1 never mentioned. Merge rather than replace - going back to a
-      // previous page would otherwise blank out names already looked up.
-      if (crit.mode === 'partial') {
+      // A partial or case-only search discovers its part numbers, so page 2
+      // may hold parts page 1 never mentioned. Merge rather than replace -
+      // going back a page would otherwise blank out names already looked up.
+      if (crit.part.mode !== 'exact') {
         const unknown = data.map((r) => r.part_number).filter((p) => !(p in names))
         if (unknown.length > 0) {
           const more = await fetchNames(unknown)
@@ -374,10 +405,11 @@ export default function SearchPage() {
     // `loading` on its behalf, so do it here.
     reqRef.current++
     searchRef.current++
-    partsRef.current = { mode: 'empty', parts: [] }
+    critRef.current = EMPTY_SEARCH
     setLoading(false)
     setInput('')
-    setCriteria({ mode: 'empty', parts: [] })
+    setCaseInput('')
+    setCriteria(EMPTY_SEARCH)
     setRows([])
     setNames({})
     setMissing([])
@@ -407,6 +439,24 @@ export default function SearchPage() {
   return (
     <>
       <form onSubmit={runSearch} className="search">
+        {/* A single line, not a textarea. Case numbers cannot be pasted as a
+            list: 54,728 of them contain spaces and 4 contain commas, so there
+            is no separator that could be split on without cutting real case
+            numbers in half. One fragment at a time. */}
+        <label htmlFor="caseno">Case number</label>
+        <input
+          id="caseno"
+          type="text"
+          value={caseInput}
+          onChange={(e) => setCaseInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') runSearch(e)
+          }}
+          placeholder="any part of the case number - P03741331, or 2026 1320&-"
+          spellCheck={false}
+          autoComplete="off"
+        />
+
         <label htmlFor="pn">Part numbers</label>
         <textarea
           id="pn"
@@ -514,12 +564,7 @@ export default function SearchPage() {
                 'Loading...'
               ) : total === 0 ? (
                 <>
-                  No rows found for{' '}
-                  {criteria.mode === 'partial'
-                    ? `part numbers containing ${criteria.term}`
-                    : criteria.parts.length === 1
-                      ? criteria.parts[0]
-                      : `these ${nf.format(criteria.parts.length)} part numbers`}
+                  No rows found for {describeSearch(criteria, nf.format)}
                   {filterNote(caseFilter, zoneFilters)}.
                 </>
               ) : (
@@ -527,19 +572,31 @@ export default function SearchPage() {
                   Showing <strong>{nf.format(firstRow)}</strong>&ndash;
                   <strong>{nf.format(lastRow)}</strong> of{' '}
                   <strong>{nf.format(total)}</strong> rows
-                  {/* A partial search matched parts nobody named, so say how
-                      many - otherwise it is not obvious the search was fuzzy. */}
-                  {criteria.mode === 'partial' ? (
+                  {/* A search that DISCOVERS its part numbers - partial, or by
+                      case number alone - matched parts nobody named, so say how
+                      many. An exact list already knows what it asked for. */}
+                  {criteria.part.mode === 'exact' ? (
+                    criteria.part.parts.length > 1 &&
+                    ` across ${nf.format(criteria.part.parts.length)} part numbers`
+                  ) : (
                     <>
                       {' '}
                       across <strong>{nf.format(pageParts)}</strong>
-                      {pageParts === 1 ? ' part number' : ' part numbers'} containing{' '}
-                      <strong>{criteria.term}</strong>
+                      {pageParts === 1 ? ' part number' : ' part numbers'}
+                      {criteria.part.mode === 'partial' && (
+                        <>
+                          {' '}
+                          containing <strong>{criteria.part.term}</strong>
+                        </>
+                      )}
                       {total > PAGE_SIZE && ' on this page'}
                     </>
-                  ) : (
-                    criteria.parts.length > 1 &&
-                    ` across ${nf.format(criteria.parts.length)} part numbers`
+                  )}
+                  {criteria.caseNo.mode === 'partial' && (
+                    <>
+                      {' '}
+                      in cases matching <strong>{criteria.caseNo.term}</strong>
+                    </>
                   )}
                 </>
               )}
