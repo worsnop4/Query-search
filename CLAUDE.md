@@ -15,15 +15,15 @@ real data and is not obvious from the code.
 |---|---|
 | Search page (public) | **Working, verified against live data** |
 | Query upload — 39 raw `.xls` files at once | **Working end to end** (194,278 rows, ~4 min) |
-| Master Data upload (`.xlsb` PFEP) | Built, shares the same UI — **never run by the user** |
+| Master Data upload (`.xlsb` PFEP) | **Working, verified** — 19,167 rows loaded 29 Aug 2026 |
 | Upload log / "Last update" header | Working |
 | Admin presence + exclusive upload claim | **Working, verified with two real accounts** |
-| Search filter by zone type | **Working** — needs `02_search_helpers.sql` re-run for the `zone_types` view |
+| Search filter by zone type | **Working, verified** — `zone_types` view is live |
 | Admin export of all inventory | **Working, verified** — zipped CSV, ~1.8 MB from ~24 MB |
 | Copy search results to clipboard | **Working, verified** — TSV, all matching rows not just the page |
 | WhatsApp "notify group" after an upload | **Working** — pre-fills the message; the group is picked by hand, see below |
-| Partial search by last 4 digits | **Working** — needs `06_partial_search.sql` for the trigram index, or it is ~0.8s per search |
-| Search by case number | **Built** — needs `07_case_search.sql`, or it is ~0.8-1.4s per search |
+| Partial search by last 4 digits | **Working, verified** — `06_partial_search.sql` is applied |
+| Search by case number | **Working** — `07_case_search.sql` is applied; 183ms vs a 456ms un-indexed control |
 | Vercel deploy | Live, auto-deploys from `main` |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Not started** — has open questions, see below |
@@ -462,14 +462,12 @@ new file shape appears.
 
 ### Needs the user, blocking nothing
 
-1. **Test the Master Data upload once.** Built and sharing the same UI as Query,
-   but never actually run. ~10 chunks, finishes in seconds.
-2. **Re-check the Vercel site** — three commits have deployed since the user
+1. **Confirm public signup is OFF** in Supabase → Authentication → Sign In /
+   Providers. Asked three times, never confirmed. The site is public, so if
+   signups are on, anyone can create an account and replace the data.
+   **Security relevant, and the only unresolved item in this group.**
+2. **Re-check the Vercel site** — several commits have deployed since the user
    last looked at it.
-3. **Confirm public signup is OFF** in Supabase → Authentication → Sign In /
-   Providers. Asked twice, never confirmed. The site is public, so if signups
-   are on, anyone can create an account and replace the data. **Security
-   relevant — check this early.**
 
 ### Open questions, blocking the Breakdown feature
 
