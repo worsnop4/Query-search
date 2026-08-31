@@ -25,6 +25,7 @@ real data and is not obvious from the code.
 | Partial search by last 4 digits | **Working, verified** — `06_partial_search.sql` is applied |
 | Search by case number | **Working** — `07_case_search.sql` is applied; 183ms vs a 456ms un-indexed control |
 | Vercel deploy | Live, auto-deploys from `main` |
+| Cycle count | **Built** — needs `08_cycle_count.sql`. Scan + 4 buckets done; adjustment file and statistics not started |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Not started** — has open questions, see below |
 
@@ -314,6 +315,65 @@ at the bottom of `setup.sql`.
 area buckets matched Excel's own formula output exactly. Zero mismatches. Don't
 casually "fix" this logic; re-verify if you touch it.
 
+### Cycle count: one location, full cases, four buckets
+
+Settled with the user 31 Aug 2026, and each answer narrowed the design a lot:
+
+- **Scanned with a mobile barcode scanner**, not typed. So `/cycle-count` is a
+  phone-first screen: the scan box is the biggest target on it, keeps focus
+  after every scan, and submits on Enter — a wedge scanner types the text and
+  sends Enter, so losing focus silently drops scans.
+- **One location per session.**
+- **Full cases only.** Opened cases are handled with another tool. The expected
+  list is therefore `is_case_opened = 'No'`, which removes **32.4%** of the
+  case+location pairs — without that filter a third of every location would
+  report as "not checked" on every single count.
+- **Only location matters.** No quantity counting.
+- The fourth bucket is the user's own words: *"on query but not checked = need
+  check later"*.
+
+Sized before building: 4,286 locations hold at least one full case, **median 8
+cases, p75 25, p90 46**. The ten biggest are not real racks — `NEED-CHECK-CASE`
+8,666, `TRANSIT` 3,194, `TRANSIT-HR` 2,573.
+
+**Why there are tables and not just a screen that adds up.** Three buckets come
+from the scans, but the fourth — *expected here, never scanned* — is everything
+that did **not** happen. It cannot be derived from the scans alone. So
+`start_cycle_count()` copies the expected case numbers into
+`cycle_count_expected` before counting starts, and `record_scan()` stores the
+system location it saw **at the moment of the scan**.
+
+That freezing is not optional: `swap_inventory()` truncates and re-inserts, so
+a session started in the morning and finished after lunch would otherwise be
+measured against different data than it began with, and "not checked" would
+quietly change meaning. Nothing in a finished session is recomputed later.
+
+Other decisions worth keeping:
+
+- **Classification happens in Postgres**, not the browser. The result is the
+  record of what was counted, so a client must not be able to post one.
+  `record_scan()` is `SECURITY DEFINER`; the tables take no direct writes.
+- **A repeat scan does not count twice** — `unique (session_id, case_no)`, and
+  a second scan replays the stored answer rather than a freshly computed one,
+  so the screen always agrees with the row. Double scans are normal with a
+  hand scanner.
+- **`system_locations` is an array.** A case is not always in one place: 381 of
+  108,778 full cases (0.35%) sit in more than one location. Any one of them
+  matching is a match.
+- **Exact match first, contains as a fallback**, and the fallback is accepted
+  only when it resolves to exactly one case number. Guessing which case was in
+  someone's hand is worse than saying it was not found.
+- Scans are **queued and sent one at a time**. A wedge scanner can fire faster
+  than a round trip, and a silently dropped scan is the one failure a counter
+  would never notice.
+- **Session timestamps are correct.** They come from `now()`, not from the
+  imported text columns, so the 7-hour bug below does not touch them. It will
+  still matter for grouping into weeks and months.
+
+`src/lib/cycleCount.js` is the pure half (reading a scan, the buckets,
+accuracy, the report ordering) and is covered by `scripts/test-cycle-count.mjs`
+with no database. `cycleCountData.js` holds the Supabase calls.
+
 ### Search does three queries, not a join
 
 `SearchPage` queries `inventory` directly (paginated, `count: 'exact'`), fetches
@@ -468,6 +528,16 @@ new file shape appears.
    **Security relevant, and the only unresolved item in this group.**
 2. **Re-check the Vercel site** — several commits have deployed since the user
    last looked at it.
+
+3. **Run `supabase/08_cycle_count.sql`.** The cycle count page cannot work
+   without it — nothing else in the app is affected.
+4. **The WMS adjustment file.** The user has an Excel template for
+   non-matching cases and will supply a sample. Deferred by them, not by us:
+   *"i want if we have done counting automatic generate adjustment we will
+   discuss later and ill give the sample."* Design so the report rows
+   (`reportRows()` in `cycleCount.js`) feed straight into it.
+5. **Cycle count statistics per week and month.** Not started. **Fix the
+   timezone below first** — this is the feature that exposes it.
 
 ### Open questions, blocking the Breakdown feature
 

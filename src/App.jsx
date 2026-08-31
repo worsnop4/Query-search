@@ -18,6 +18,10 @@ import LoginPage from './pages/LoginPage'
 // nobody uses upload, so load it only when someone actually opens /admin.
 const AdminPage = lazy(() => import('./pages/AdminPage'))
 
+// Lazy for the opposite reason: the cycle count is used on a phone in the
+// warehouse and must not drag SheetJS along behind it.
+const CycleCountPage = lazy(() => import('./pages/CycleCountPage'))
+
 const nf = new Intl.NumberFormat()
 
 function RequireAuth({ children }) {
@@ -57,6 +61,7 @@ function TopBar() {
   const location = useLocation()
   const sessionId = useSessionId()
   const onAdmin = location.pathname.startsWith('/admin')
+  const onCount = location.pathname.startsWith('/cycle-count')
 
   // Drop the presence row before the token goes away - admin_release needs a
   // valid session to identify the caller, so it cannot be done afterwards.
@@ -78,13 +83,21 @@ function TopBar() {
       <div className="topactions">
         <LastUpdate />
 
-        {onAdmin ? (
+        {onAdmin || onCount ? (
           <Link className="btn ghost" to="/">
             &larr; Back to search
           </Link>
         ) : (
           <Link className="btn" to="/admin">
             Update query
+          </Link>
+        )}
+
+        {/* Only offered once signed in: it is an admin job, and showing it to
+            everyone would just be a link to the login page. */}
+        {session && !onCount && (
+          <Link className="btn ghost" to="/cycle-count">
+            Cycle count
           </Link>
         )}
 
@@ -125,6 +138,16 @@ export default function App() {
                 <RequireAuth>
                   <Suspense fallback={<p className="muted">Loading uploader...</p>}>
                     <AdminPage />
+                  </Suspense>
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/cycle-count"
+              element={
+                <RequireAuth>
+                  <Suspense fallback={<p className="muted">Loading cycle count...</p>}>
+                    <CycleCountPage />
                   </Suspense>
                 </RequireAuth>
               }

@@ -12,6 +12,9 @@
   --warn-bg: #fffbeb;
   --warn-border: #fde68a;
   --warn-text: #92400e;
+  --ok-bg: #f0fdf4;
+  --ok-border: #bbf7d0;
+  --ok-text: #166534;
   --row-alt: #fafbfc;
 
   color-scheme: light dark;
@@ -32,6 +35,9 @@
     --warn-bg: #2a2213;
     --warn-border: #57451c;
     --warn-text: #fcd34d;
+    --ok-bg: #14241a;
+    --ok-border: #245334;
+    --ok-text: #86efac;
     --row-alt: #22252b;
   }
 }
@@ -924,3 +930,190 @@ input[type='file'] {
     flex-basis: 100%;
   }
 }
+
+/* ---------- cycle count ---------- */
+
+/* Used on a phone in the warehouse, so everything here is bigger than the
+   desktop pages and the scan box is the largest target on the screen. */
+
+.ccsearch,
+.ccinput {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 15px;
+  margin-top: 12px;
+}
+
+.ccinput {
+  font-size: 18px;
+  padding: 16px;
+  border-width: 2px;
+  border-color: var(--accent);
+}
+
+.ccsearch:focus,
+.ccinput:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.loclist {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.loclist li + li {
+  margin-top: 6px;
+}
+
+.locbtn {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.locbtn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.cchead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.cchead h2 {
+  margin: 2px 0 0;
+  font-size: 20px;
+}
+
+/* The answer to the last scan. Deliberately loud: it is read at arm's length
+   while holding a scanner. */
+.ccresult {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.ccresult strong {
+  font-size: 18px;
+}
+
+.ccresultcase {
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.ccresult.ok {
+  background: var(--ok-bg);
+  border-color: var(--ok-border);
+  color: var(--ok-text);
+}
+
+.ccresult.warn {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--warn-text);
+}
+
+.ccresult.bad {
+  background: var(--error-bg);
+  border-color: var(--error-border);
+  color: var(--error-text);
+}
+
+.ccounts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  margin-top: 14px;
+}
+
+@media (max-width: 560px) {
+  .ccounts {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.ccount {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 12px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.ccount strong {
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.ccount span {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.ccount.ok    { background: var(--ok-bg);    border-color: var(--ok-border); }
+.ccount.warn  { background: var(--warn-bg);  border-color: var(--warn-border); }
+.ccount.bad   { background: var(--error-bg); border-color: var(--error-border); }
+
+.ccount.ok strong   { color: var(--ok-text); }
+.ccount.warn strong { color: var(--warn-text); }
+.ccount.bad strong  { color: var(--error-text); }
+
+.ccactions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.ccaccuracy {
+  margin: 14px 0 0;
+  font-size: 15px;
+}
+
+.ccaccuracy strong {
+  font-size: 26px;
+}
+
+.pill {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+}
+
+.pill.ok    { background: var(--ok-bg);    border-color: var(--ok-border);    color: var(--ok-text); }
+.pill.warn  { background: var(--warn-bg);  border-color: var(--warn-border);  color: var(--warn-text); }
+.pill.bad   { background: var(--error-bg); border-color: var(--error-border); color: var(--error-text); }
+.pill.muted { color: var(--muted); }
