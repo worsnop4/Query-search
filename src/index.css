@@ -1222,3 +1222,61 @@ input[type='file'] {
   width: 18px;
   height: 18px;
 }
+
+/* --- cycle count chart -----------------------------------------------------
+
+   Four series that must stay apart in both themes and for the most common
+   colour blindness. Green/amber/red carry the same meaning as the pills, and
+   "wrong location" takes blue rather than a fourth warm colour so it does not
+   read as a severity between amber and red. */
+
+:root {
+  --c-true: #16a34a;
+  --c-opened: #d97706;
+  --c-wrong: #2563eb;
+  --c-missing: #dc2626;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --c-true: #4ade80;
+    --c-opened: #fbbf24;
+    --c-wrong: #60a5fa;
+    --c-missing: #f87171;
+  }
+}
+
+.ccchartwrap {
+  margin-top: 14px;
+  overflow-x: auto;
+}
+
+.ccchart {
+  display: block;
+  width: 100%;
+  /* Below this the bars stop being readable and the wrapper scrolls instead. */
+  min-width: 460px;
+  height: auto;
+}
+
+.ccchart rect {
+  shape-rendering: crispEdges;
+}
+
+.cclegend {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-top: 10px;
+  font-size: 13px;
+}
+
+.cclegend i {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}

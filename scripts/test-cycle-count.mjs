@@ -17,6 +17,7 @@ import {
   describeScan,
   reportRows,
   suggestedAction,
+  totalsByDay,
 } from '../src/lib/cycleCount.js'
 import { checker } from './lib.mjs'
 
@@ -191,6 +192,52 @@ check('missing counts do not throw', suggestedAction(null) === '', '""')
 check('every suggestion is a real action',
       [{ opened_mismatch: 1 }, { not_in_query: 1 }, { wrong_location: 1 }]
         .every((c) => ACTIONS.some((a) => a.value === suggestedAction(c))), 'ok')
+
+console.log('\n--- adding the admins together, per day (the chart) ---')
+
+// cycle_count_daily is grouped by day AND admin. The chart wants the
+// warehouse's total for the day, whoever counted it.
+const daily = [
+  { count_date: '2026-08-31', started_by: 'doni', clean_match: 10, opened_mismatch: 1,
+    wrong_location: 2, not_in_query: 0, not_checked: 5, scanned: 13, locations: 2 },
+  { count_date: '2026-08-31', started_by: 'dion', clean_match: 4, opened_mismatch: 0,
+    wrong_location: 1, not_in_query: 3, not_checked: 2, scanned: 8, locations: 1 },
+  { count_date: '2026-08-30', started_by: 'doni', clean_match: 7, opened_mismatch: 0,
+    wrong_location: 0, not_in_query: 0, not_checked: 0, scanned: 7, locations: 1 },
+]
+const byDay = totalsByDay(daily)
+
+check('one row per day, not per admin', byDay.length === 2, String(byDay.length))
+check('newest day first', byDay[0].count_date === '2026-08-31', byDay[0].count_date)
+
+const d31 = byDay[0]
+check('clean matches add up', d31.clean_match === 14, String(d31.clean_match))
+check('scanned adds up', d31.scanned === 21, String(d31.scanned))
+check('every bucket adds up',
+      d31.opened_mismatch === 1 && d31.wrong_location === 3 && d31.not_in_query === 3,
+      `${d31.opened_mismatch}/${d31.wrong_location}/${d31.not_in_query}`)
+check('need check adds up too', d31.not_checked === 7, String(d31.not_checked))
+check('locations add up', d31.locations === 3, String(d31.locations))
+check('admins are counted, not summed', d31.admins === 2, String(d31.admins))
+check('a single-admin day still reports 1 admin', byDay[1].admins === 1, String(byDay[1].admins))
+
+// The stacked bar is only honest if the parts really make up the whole.
+check('the four scanned buckets equal the total scanned',
+      byDay.every((d) =>
+        d.clean_match + d.opened_mismatch + d.wrong_location + d.not_in_query === d.scanned),
+      'ok')
+// Need check must NOT be in the stack - those cases were never handled.
+check('need check is kept out of scanned',
+      d31.scanned === 21 && d31.not_checked === 7, `${d31.scanned} / ${d31.not_checked}`)
+
+check('the accuracy of a summed day is right',
+      Math.abs(accuracy({ clean_match: d31.clean_match, scanned: d31.scanned }) - 66.667) < 0.01,
+      accuracy({ clean_match: d31.clean_match, scanned: d31.scanned }).toFixed(3))
+
+check('no days is an empty list, not a crash', totalsByDay([]).length === 0, '0')
+check('string counts from PostgREST still add up',
+      totalsByDay([{ count_date: 'x', started_by: 'a', clean_match: '3', scanned: '4' }])[0]
+        .clean_match === 3, 'numeric')
 
 console.log('\n--- the five buckets are all named ---')
 check('every bucket has a label and tone',

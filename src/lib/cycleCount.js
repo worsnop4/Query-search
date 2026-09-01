@@ -195,6 +195,48 @@ export function reportRows(scans, notChecked) {
 }
 
 /**
+ * Collapse the per-admin daily rows into one row per day.
+ *
+ * `cycle_count_daily` is grouped by day AND admin so the table can show who
+ * did what. The chart wants the warehouse's total for the day regardless of
+ * who counted it, so the admins are added together here rather than in a
+ * second SQL view - it is a handful of rows and this stays testable.
+ *
+ * Newest first, matching the order the rows arrive in.
+ */
+export function totalsByDay(days) {
+  const byDate = new Map()
+  const add = (t, d, k) => { t[k] += Number(d[k]) || 0 }
+
+  for (const d of days) {
+    const key = d.count_date
+    if (!byDate.has(key)) {
+      byDate.set(key, {
+        count_date: key,
+        clean_match: 0,
+        opened_mismatch: 0,
+        wrong_location: 0,
+        not_in_query: 0,
+        not_checked: 0,
+        scanned: 0,
+        locations: 0,
+        _admins: new Set(),
+      })
+    }
+    const t = byDate.get(key)
+    for (const k of ['clean_match', 'opened_mismatch', 'wrong_location',
+                     'not_in_query', 'not_checked', 'scanned', 'locations']) {
+      add(t, d, k)
+    }
+    if (d.started_by) t._admins.add(d.started_by)
+  }
+
+  return [...byDate.values()]
+    .map(({ _admins, ...t }) => ({ ...t, admins: _admins.size }))
+    .sort((a, b) => String(b.count_date).localeCompare(String(a.count_date)))
+}
+
+/**
  * The action a count most likely needs, offered as the default for the whole
  * session. A suggestion only - the admin chooses.
  *

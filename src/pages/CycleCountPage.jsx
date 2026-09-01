@@ -10,6 +10,7 @@ import {
   describeScan,
   reportRows,
   suggestedAction,
+  totalsByDay,
 } from '../lib/cycleCount'
 import {
   searchLocations,
@@ -626,6 +627,148 @@ function pctOf(row) {
   return accuracy({ clean_match: Number(row.clean_match), scanned: Number(row.scanned) })
 }
 
+// ---------------------------------------------------------------------------
+// The chart: what everyone found, by day.
+//
+// Hand-drawn SVG rather than a charting library. Recharts is ~100 kB gzipped
+// and this page is opened on a phone in the warehouse - the whole cycle count
+// chunk is currently 6 kB. One stacked bar chart does not justify that, and a
+// dependency here would be the first in the project outside React itself.
+//
+// Sized with a viewBox so it scales to any width without the text distorting;
+// colours come from CSS variables so light and dark both work.
+// ---------------------------------------------------------------------------
+
+const SERIES = [
+  { key: 'clean_match', label: 'True', fill: 'var(--c-true)' },
+  { key: 'opened_mismatch', label: 'Query says opened', fill: 'var(--c-opened)' },
+  { key: 'wrong_location', label: 'Wrong location', fill: 'var(--c-wrong)' },
+  { key: 'not_in_query', label: 'Not in Query', fill: 'var(--c-missing)' },
+]
+
+/** A round number at or above v, so the axis reads 40 rather than 37. */
+function niceMax(v) {
+  if (!(v > 0)) return 1
+  const base = Math.pow(10, Math.floor(Math.log10(v)))
+  for (const m of [1, 1.5, 2, 2.5, 3, 4, 5, 7.5, 10]) {
+    if (v <= m * base) return m * base
+  }
+  return 10 * base
+}
+
+const VB_W = 760
+const VB_H = 250
+const PAD = { top: 14, right: 10, bottom: 38, left: 42 }
+const PLOT_W = VB_W - PAD.left - PAD.right
+const PLOT_H = VB_H - PAD.top - PAD.bottom
+
+function DayChart({ days, limit = 21 }) {
+  // Oldest on the left, which is how a date axis is read.
+  const data = totalsByDay(days).slice(0, limit).reverse()
+  if (data.length === 0) return null
+
+  const max = niceMax(Math.max(...data.map((d) => d.scanned), 1))
+  const band = PLOT_W / data.length
+  const barW = Math.min(band * 0.62, 44)
+  const y = (v) => PAD.top + PLOT_H - (v / max) * PLOT_H
+
+  // Four gridlines is enough to read a height against without becoming a grid.
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(max * f))
+  // Thin the date labels rather than letting them collide.
+  const every = data.length <= 11 ? 1 : data.length <= 18 ? 2 : 3
+
+  return (
+    <>
+      <div className="ccchartwrap">
+        <svg
+          className="ccchart"
+          viewBox={`0 0 ${VB_W} ${VB_H}`}
+          role="img"
+          aria-label="Cases counted each day, split by result"
+        >
+          {ticks.map((t) => (
+            <g key={t}>
+              <line
+                x1={PAD.left} x2={VB_W - PAD.right}
+                y1={y(t)} y2={y(t)}
+                stroke="var(--border)" strokeWidth="1"
+              />
+              <text
+                x={PAD.left - 7} y={y(t) + 4}
+                textAnchor="end" fontSize="11" fill="var(--muted)"
+              >
+                {nf.format(t)}
+              </text>
+            </g>
+          ))}
+
+          {data.map((d, i) => {
+            const x = PAD.left + i * band + (band - barW) / 2
+            const pct = pctOf(d)
+            let top = 0
+            return (
+              <g key={d.count_date}>
+                <title>
+                  {`${d.count_date} — ${nf.format(d.scanned)} counted, ` +
+                    `${nf.format(d.clean_match)} true` +
+                    (pct === null ? '' : ` (${pct.toFixed(1)}%)`) +
+                    `\n${nf.format(d.opened_mismatch)} Query says opened, ` +
+                    `${nf.format(d.wrong_location)} wrong location, ` +
+                    `${nf.format(d.not_in_query)} not in Query` +
+                    `\n${nf.format(d.not_checked)} need check · ` +
+                    `${nf.format(d.locations)} location${d.locations === 1 ? '' : 's'} · ` +
+                    `${d.admins} admin${d.admins === 1 ? '' : 's'}`}
+                </title>
+                {SERIES.map((s) => {
+                  const v = d[s.key]
+                  if (!v) return null
+                  const h = (v / max) * PLOT_H
+                  const yTop = PAD.top + PLOT_H - top - h
+                  top += h
+                  return (
+                    <rect
+                      key={s.key}
+                      x={x} y={yTop} width={barW} height={h}
+                      fill={s.fill}
+                    />
+                  )
+                })}
+                {i % every === 0 && (
+                  <text
+                    x={x + barW / 2} y={VB_H - PAD.bottom + 16}
+                    textAnchor="middle" fontSize="11" fill="var(--muted)"
+                  >
+                    {String(d.count_date).slice(5)}
+                  </text>
+                )}
+              </g>
+            )
+          })}
+
+          <line
+            x1={PAD.left} x2={VB_W - PAD.right}
+            y1={y(0)} y2={y(0)}
+            stroke="var(--muted)" strokeWidth="1"
+          />
+        </svg>
+      </div>
+
+      <div className="cclegend">
+        {SERIES.map((s) => (
+          <span key={s.key}>
+            <i style={{ background: s.fill }} aria-hidden="true" />
+            {s.label}
+          </span>
+        ))}
+        <span className="muted small">
+          Cases scanned per day, all admins together. Need check is not shown -
+          those cases were never handled.
+        </span>
+      </div>
+    </>
+  )
+}
+
 function Pct({ row }) {
   const p = pctOf(row)
   if (p === null) return <span className="muted">&mdash;</span>
@@ -742,6 +885,8 @@ function Dashboard({ onError, onStart }) {
             : 'Download all counts (CSV)'}
         </button>
       </div>
+
+      <DayChart days={days} />
 
       {admins.length > 0 && (
         <>

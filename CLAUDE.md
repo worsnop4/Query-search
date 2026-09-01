@@ -435,6 +435,16 @@ asked for it directly. "Start a cycle count" reveals the picker; **Back**
 returns. There are two downloads: one count from its result screen, and every
 case from every count by every admin from the dashboard.
 
+**The chart is hand-drawn SVG, not a charting library.** Recharts is ~100 kB
+gzipped; the whole cycle count chunk is 7.6 kB including the chart, and this
+page opens on a phone in the warehouse. One stacked bar chart does not justify
+the first dependency outside React. It scales by `viewBox` so the text does not
+distort, takes its colours from CSS variables so both themes work, and stacks
+only the four *scanned* buckets — "need check" is deliberately absent, because
+those cases were never handled and adding them would inflate the bar above what
+was actually counted. `totalsByDay()` in `cycleCount.js` adds the admins
+together (`cycle_count_daily` is per day **and** admin) and is tested.
+
 The all-counts export reads `cycle_count_rows` (`12`), a view that UNIONs the
 scans with the expected-but-never-scanned rows. The "need check" half is
 defined by *absence* from `cycle_count_scan`, so Postgres does the anti-join —
