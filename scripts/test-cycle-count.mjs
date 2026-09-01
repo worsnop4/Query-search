@@ -145,8 +145,7 @@ check('wrong location names where it should be',
 
 console.log('\n--- the adjustment worklist ---')
 
-const withIds = scans.map((s, i) => ({ ...s, id: i + 1 }))
-const rows = reportRows(withIds, ['X', 'Y'])
+const rows = reportRows(scans, ['X', 'Y'])
 
 check('clean matches are left out', rows.every((r) => r.bucket !== 'clean_match'),
       rows.map((r) => r.bucket).join(','))
@@ -155,19 +154,19 @@ check('not in query is first', rows[0].bucket === 'not_in_query', rows[0].bucket
 check('the crucial finding is second', rows[1].bucket === 'opened_mismatch', rows[1].bucket)
 check('wrong location next', rows[2].bucket === 'wrong_location', rows[2].bucket)
 check('need check last', rows.at(-1).bucket === 'not_checked', rows.at(-1).bucket)
+check('never-scanned cases are included',
+      rows.filter((r) => r.bucket === 'not_checked').map((r) => r.case_no).join(',') === 'X,Y',
+      rows.filter((r) => r.bucket === 'not_checked').map((r) => r.case_no).join(','))
 
-// A never-scanned case has no scan row, so no decision can be attached to it.
-const later = rows.filter((r) => r.bucket === 'not_checked')
-check('never-scanned rows carry no id', later.every((r) => r.id === null),
-      later.map((r) => String(r.id)).join(','))
-check('scanned problems all carry an id',
-      rows.filter((r) => r.bucket !== 'not_checked').every((r) => r.id != null), 'ok')
+// The decision is per COUNT now, not per case, so no row carries one.
+check('no row carries its own reason or action',
+      rows.every((r) => !('reason' in r) && !('action' in r)), 'ok')
 
 check('a perfect count has an empty worklist',
-      reportRows([{ id: 1, case_no: 'A', result: 'match', query_opened: false }], []).length === 0,
+      reportRows([{ case_no: 'A', result: 'match', query_opened: false }], []).length === 0,
       '0')
 
-console.log('\n--- actions ---')
+console.log('\n--- actions: one decision for the whole count ---')
 
 check('the four actions the user asked for',
       ACTIONS.map((a) => a.value).join(',') === 'put_away,shortage,profit,shortage_profit',
@@ -175,20 +174,23 @@ check('the four actions the user asked for',
 check('shortage + profit is labelled properly',
       ACTION_LABEL.shortage_profit === 'Shortage + Profit', ACTION_LABEL.shortage_profit)
 
-// A case Query has as opened but was found full needs taking off and putting
-// back - the pair.
-check('opened mismatch suggests shortage + profit',
-      suggestedAction('opened_mismatch') === 'shortage_profit',
-      suggestedAction('opened_mismatch'))
-check('wrong location suggests put away',
-      suggestedAction('wrong_location') === 'put_away', suggestedAction('wrong_location'))
-check('not in query suggests profit',
-      suggestedAction('not_in_query') === 'profit', suggestedAction('not_in_query'))
-check('nothing is suggested for an unscanned case',
-      suggestedAction('not_checked') === '', `"${suggestedAction('not_checked')}"`)
+// Driven by the worst finding: a case Query has as opened but was actually
+// full has to come off and go back on, so it outranks the others.
+check('an opened mismatch suggests shortage + profit',
+      suggestedAction({ opened_mismatch: 1, not_in_query: 3, wrong_location: 9 })
+        === 'shortage_profit', 'shortage_profit')
+check('otherwise not in query suggests profit',
+      suggestedAction({ opened_mismatch: 0, not_in_query: 1, wrong_location: 9 })
+        === 'profit', 'profit')
+check('otherwise wrong location suggests put away',
+      suggestedAction({ opened_mismatch: 0, not_in_query: 0, wrong_location: 1 })
+        === 'put_away', 'put_away')
+check('a clean count suggests nothing',
+      suggestedAction({ opened_mismatch: 0, not_in_query: 0, wrong_location: 0 }) === '', '""')
+check('missing counts do not throw', suggestedAction(null) === '', '""')
 check('every suggestion is a real action',
-      ['wrong_location', 'not_in_query', 'opened_mismatch']
-        .every((b) => ACTIONS.some((a) => a.value === suggestedAction(b))), 'ok')
+      [{ opened_mismatch: 1 }, { not_in_query: 1 }, { wrong_location: 1 }]
+        .every((c) => ACTIONS.some((a) => a.value === suggestedAction(c))), 'ok')
 
 console.log('\n--- the five buckets are all named ---')
 check('every bucket has a label and tone',

@@ -24,7 +24,16 @@ import {
   sessionScans,
   recentSessions,
   openSession,
+  dailyStats,
+  adminStats,
 } from '../lib/cycleCountData'
+import {
+  buildResultCsv,
+  resultFileName,
+  buildDailyCsv,
+  dailyFileName,
+} from '../lib/cycleCountExport'
+import { saveCsv } from '../lib/download'
 
 const nf = new Intl.NumberFormat()
 
@@ -324,102 +333,114 @@ function ScanScreen({ session, onFinished, onError }) {
 }
 
 // ---------------------------------------------------------------------------
-// The follow-up on one discrepancy: reason, action, done.
-// Mirrors the Historic / DO / Status columns of the workbook.
+// One reason / action / status for the WHOLE count, mirroring the workbook's
+// Historic / DO / Status columns.
+//
+// Not per case, deliberately: "no need reason for every case number. make
+// reason action, status for 1 location". A count is one location on one day
+// and gets one decision.
 // ---------------------------------------------------------------------------
 
-function FollowupRow({ row, onError }) {
-  const [reason, setReason] = useState(row.reason)
-  const [action, setAction] = useState(row.action || suggestedAction(row.bucket))
-  const [done, setDone] = useState(row.done)
+function SessionFollowup({ summary, counts, onError }) {
+  const [reason, setReason] = useState(summary.reason ?? '')
+  const [action, setAction] = useState(summary.action ?? suggestedAction(counts))
+  const [done, setDone] = useState(!!summary.done)
+  const [remark, setRemark] = useState(summary.remark ?? '')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
   const save = useCallback(
     async (next) => {
-      if (row.id == null) return
       setSaving(true)
       try {
-        await saveFollowup(row.id, { reason, action, done, ...next })
+        await saveFollowup(summary.id, { reason, action, done, remark, ...next })
         setSaved(true)
-        setTimeout(() => setSaved(false), 1500)
+        setTimeout(() => setSaved(false), 1800)
       } catch (err) {
         onError(err.message)
       } finally {
         setSaving(false)
       }
     },
-    [row.id, reason, action, done, onError]
+    [summary.id, reason, action, done, remark, onError]
   )
 
   return (
-    <tr className={done ? 'ccdone' : undefined}>
-      <td className="mono ccbreak">{row.case_no}</td>
-      <td>
-        <span className={`pill ${RESULTS[row.bucket].tone}`}>{RESULTS[row.bucket].label}</span>
-      </td>
-      <td className="small">
-        {row.bucket === 'not_checked'
-          ? 'Expected here, never scanned'
-          : describeScan({ ...row, result: row.bucket === 'opened_mismatch' ? 'match' : row.bucket })}
-      </td>
-      {row.id == null ? (
-        // A case nobody scanned has no scan row to attach a decision to. It is
-        // a list to go and look at, not work that can be recorded yet.
-        <td colSpan={3} className="muted small">
-          Check this case later
-        </td>
-      ) : (
-        <>
-          <td>
-            <input
-              type="text"
-              className="ccreason"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              onBlur={() => save({})}
-              placeholder="Reason"
-              spellCheck={false}
-            />
-          </td>
-          <td>
-            <select
-              value={action}
-              onChange={(e) => {
-                setAction(e.target.value)
-                save({ action: e.target.value })
-              }}
-            >
-              <option value="">Choose...</option>
-              {ACTIONS.map((a) => (
-                <option key={a.value} value={a.value}>
-                  {a.label}
-                </option>
-              ))}
-            </select>
-          </td>
-          <td className="num">
-            <input
-              type="checkbox"
-              checked={done}
-              onChange={(e) => {
-                setDone(e.target.checked)
-                save({ done: e.target.checked })
-              }}
-              aria-label="Done"
-            />
-            {saving && <span className="muted small"> ...</span>}
-            {saved && <span className="ok small"> ok</span>}
-          </td>
-        </>
-      )}
-    </tr>
+    <div className="card">
+      <h3>What to do about this location</h3>
+      <p className="muted small">
+        One decision for the whole count, not per case.
+      </p>
+
+      <div className="ccfollowup">
+        <label>
+          <span className="muted small">Reason</span>
+          <input
+            type="text"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            onBlur={() => save({})}
+            placeholder="Wrong put away"
+            spellCheck={false}
+          />
+        </label>
+
+        <label>
+          <span className="muted small">Action</span>
+          <select
+            value={action}
+            onChange={(e) => {
+              setAction(e.target.value)
+              save({ action: e.target.value })
+            }}
+          >
+            <option value="">Choose...</option>
+            {ACTIONS.map((a) => (
+              <option key={a.value} value={a.value}>
+                {a.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          <span className="muted small">Remark</span>
+          <input
+            type="text"
+            value={remark}
+            onChange={(e) => setRemark(e.target.value)}
+            onBlur={() => save({})}
+            placeholder="optional"
+            spellCheck={false}
+          />
+        </label>
+
+        <label className="cccheck">
+          <input
+            type="checkbox"
+            checked={done}
+            onChange={(e) => {
+              setDone(e.target.checked)
+              save({ done: e.target.checked })
+            }}
+          />
+          <span>Adjustment done</span>
+        </label>
+      </div>
+
+      <p className="muted small">
+        {saving ? 'Saving...' : saved ? 'Saved.' : ' '}
+      </p>
+    </div>
   )
 }
 
 function DoneScreen({ sessionId, onNew, onError }) {
   const [summary, setSummary] = useState(null)
   const [rows, setRows] = useState([])
+  // Kept as they came back so the CSV can hold every case, not just the
+  // problems the screen lists.
+  const [raw, setRaw] = useState({ scans: [], notChecked: [] })
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -432,6 +453,7 @@ function DoneScreen({ sessionId, onNew, onError }) {
       .then(([s, scans, notChecked]) => {
         if (!active) return
         setSummary(s)
+        setRaw({ scans, notChecked })
         setRows(reportRows(scans, notChecked))
         setLoading(false)
       })
@@ -493,31 +515,57 @@ function DoneScreen({ sessionId, onNew, onError }) {
           <button type="button" onClick={onNew}>
             Count another location
           </button>
+          {/* Every case, not just the problems on screen - the adjustment
+              document is built from this. */}
+          <button
+            type="button"
+            className="ghost"
+            onClick={() =>
+              saveCsv(
+                buildResultCsv(summary, raw.scans, raw.notChecked),
+                resultFileName(summary)
+              )
+            }
+          >
+            Download result (CSV)
+          </button>
         </div>
       </div>
+
+      <SessionFollowup summary={summary} counts={counts} onError={onError} />
 
       <div className="card">
         <h3>
           {work.length === 0
             ? 'Nothing to adjust'
-            : `${nf.format(work.length)} adjustment${work.length === 1 ? '' : 's'} to make`}
+            : `${nf.format(work.length)} case${work.length === 1 ? '' : 's'} to adjust`}
         </h3>
         {work.length > 0 && (
           <div className="tablewrap">
-            <table className="ccwork">
+            <table>
               <thead>
                 <tr>
                   <th>Case No</th>
                   <th>Problem</th>
                   <th>Query says</th>
-                  <th>Reason</th>
-                  <th>Action</th>
-                  <th className="num">Done</th>
                 </tr>
               </thead>
               <tbody>
                 {work.map((r) => (
-                  <FollowupRow key={r.id ?? r.case_no} row={r} onError={onError} />
+                  <tr key={r.case_no}>
+                    <td className="mono ccbreak">{r.case_no}</td>
+                    <td>
+                      <span className={`pill ${RESULTS[r.bucket].tone}`}>
+                        {RESULTS[r.bucket].label}
+                      </span>
+                    </td>
+                    <td className="small">
+                      {describeScan({
+                        ...r,
+                        result: r.bucket === 'opened_mismatch' ? 'match' : r.bucket,
+                      })}
+                    </td>
+                  </tr>
                 ))}
               </tbody>
             </table>
@@ -555,6 +603,173 @@ function DoneScreen({ sessionId, onNew, onError }) {
 }
 
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Dashboard: how the counting is going, per person and per day.
+//
+// Days are grouped in Asia/Jakarta by the cycle_count_daily view, not UTC - a
+// count at 06:00 WIB is 23:00 UTC the day BEFORE, so grouping in UTC would
+// quietly move early-morning counts into yesterday.
+// ---------------------------------------------------------------------------
+
+function pctOf(row) {
+  return accuracy({ clean_match: Number(row.clean_match), scanned: Number(row.scanned) })
+}
+
+function Pct({ row }) {
+  const p = pctOf(row)
+  if (p === null) return <span className="muted">&mdash;</span>
+  const tone = p >= 90 ? 'ok' : p >= 70 ? 'warn' : 'bad'
+  return <span className={`pill ${tone}`}>{p.toFixed(0)}%</span>
+}
+
+function Dashboard({ onError }) {
+  const [days, setDays] = useState([])
+  const [admins, setAdmins] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    let active = true
+    Promise.all([dailyStats(), adminStats()])
+      .then(([d, a]) => {
+        if (!active) return
+        setDays(d)
+        setAdmins(a)
+        setLoading(false)
+      })
+      .catch((err) => {
+        if (!active) return
+        onError(err.message)
+        setLoading(false)
+      })
+    return () => {
+      active = false
+    }
+  }, [onError])
+
+  if (loading) return null
+  if (days.length === 0 && admins.length === 0) return null
+
+  const total = admins.reduce(
+    (t, a) => ({
+      clean_match: t.clean_match + Number(a.clean_match),
+      scanned: t.scanned + Number(a.scanned),
+      not_checked: t.not_checked + Number(a.not_checked),
+      locations: t.locations + Number(a.locations),
+    }),
+    { clean_match: 0, scanned: 0, not_checked: 0, locations: 0 }
+  )
+  const overall = accuracy(total)
+
+  return (
+    <div className="card">
+      <div className="cchead">
+        <div>
+          <h2>Dashboard</h2>
+          <p className="muted small">Finished counts only.</p>
+        </div>
+        {overall !== null && (
+          <p className="ccaccuracy">
+            <strong>{overall.toFixed(1)}%</strong>
+            <br />
+            <span className="muted small">
+              overall &mdash; {nf.format(total.clean_match)} of{' '}
+              {nf.format(total.scanned)} cases
+            </span>
+          </p>
+        )}
+      </div>
+
+      {admins.length > 0 && (
+        <>
+          <h3>By admin</h3>
+          <div className="tablewrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Admin</th>
+                  <th className="num">Counts</th>
+                  <th className="num">Locations</th>
+                  <th className="num">Cases</th>
+                  <th className="num">True</th>
+                  <th className="num">Accuracy</th>
+                  <th className="num">Need check</th>
+                </tr>
+              </thead>
+              <tbody>
+                {admins.map((a) => (
+                  <tr key={a.started_by_uid ?? a.started_by}>
+                    <td>{a.started_by}</td>
+                    <td className="num">{nf.format(a.sessions)}</td>
+                    <td className="num">{nf.format(a.locations)}</td>
+                    <td className="num">{nf.format(a.scanned)}</td>
+                    <td className="num">{nf.format(a.clean_match)}</td>
+                    <td className="num">
+                      <Pct row={a} />
+                    </td>
+                    <td className="num">{nf.format(a.not_checked)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {days.length > 0 && (
+        <>
+          <h3>By day</h3>
+          <div className="tablewrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Admin</th>
+                  <th className="num">Locations</th>
+                  <th className="num">Cases</th>
+                  <th className="num">True</th>
+                  <th className="num">Opened</th>
+                  <th className="num">Wrong loc</th>
+                  <th className="num">Not in Query</th>
+                  <th className="num">Accuracy</th>
+                  <th className="num">Need check</th>
+                </tr>
+              </thead>
+              <tbody>
+                {days.map((d) => (
+                  <tr key={`${d.count_date}-${d.started_by}`}>
+                    <td className="mono small">{d.count_date}</td>
+                    <td className="small">{d.started_by}</td>
+                    <td className="num">{nf.format(d.locations)}</td>
+                    <td className="num">{nf.format(d.scanned)}</td>
+                    <td className="num">{nf.format(d.clean_match)}</td>
+                    <td className="num">{nf.format(d.opened_mismatch)}</td>
+                    <td className="num">{nf.format(d.wrong_location)}</td>
+                    <td className="num">{nf.format(d.not_in_query)}</td>
+                    <td className="num">
+                      <Pct row={d} />
+                    </td>
+                    <td className="num">{nf.format(d.not_checked)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="ccactions">
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => saveCsv(buildDailyCsv(days, accuracy), dailyFileName())}
+            >
+              Download statistics (CSV)
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
 
 function RecentSessions() {
   const [rows, setRows] = useState([])
@@ -663,6 +878,7 @@ export default function CycleCountPage() {
       ) : (
         <>
           <LocationPicker onStarted={setSession} onError={fail} />
+          <Dashboard onError={fail} />
           <RecentSessions />
         </>
       )}

@@ -169,9 +169,9 @@ export function describeScan(scan) {
 /**
  * Rows needing an adjustment, worst first.
  *
- * Everything except a clean match, plus the cases nobody scanned. The
- * never-scanned ones carry no scan id, so they cannot take a reason or an
- * action - they are a list to go and look at, not work to record yet.
+ * Everything except a clean match, plus the cases nobody scanned. No reason or
+ * action per row: the user asked for one decision covering the whole location,
+ * so those live on the session.
  */
 export function reportRows(scans, notChecked) {
   const rows = []
@@ -179,27 +179,14 @@ export function reportRows(scans, notChecked) {
     const bucket = bucketOf(s)
     if (bucket === 'clean_match') continue
     rows.push({
-      id: s.id,
       case_no: s.case_no,
       bucket,
       system_locations: s.system_locations ?? [],
       query_opened: !!s.query_opened,
-      reason: s.reason ?? '',
-      action: s.action ?? '',
-      done: !!s.done,
     })
   }
   for (const case_no of notChecked) {
-    rows.push({
-      id: null,
-      case_no,
-      bucket: 'not_checked',
-      system_locations: [],
-      query_opened: false,
-      reason: '',
-      action: '',
-      done: false,
-    })
+    rows.push({ case_no, bucket: 'not_checked', system_locations: [], query_opened: false })
   }
   const rank = { not_in_query: 0, opened_mismatch: 1, wrong_location: 2, not_checked: 3 }
   return rows.sort(
@@ -208,17 +195,18 @@ export function reportRows(scans, notChecked) {
 }
 
 /**
- * The action a discrepancy most likely needs, offered as the default.
+ * The action a count most likely needs, offered as the default for the whole
+ * session. A suggestion only - the admin chooses.
  *
- * A suggestion only - the counter chooses. A case in the wrong place gets put
- * away; a case Query does not know about is a profit; a case Query has as
- * opened when it is actually full has to come off and go back on.
+ * Driven by the worst thing found, in the order below: a case Query has as
+ * opened when it was actually full has to come off and go back on, which is
+ * the pair; a case Query does not know about is a profit; a case in the wrong
+ * place just gets put away.
  */
-export function suggestedAction(bucket) {
-  switch (bucket) {
-    case 'wrong_location': return 'put_away'
-    case 'not_in_query': return 'profit'
-    case 'opened_mismatch': return 'shortage_profit'
-    default: return ''
-  }
+export function suggestedAction(counts) {
+  if (!counts) return ''
+  if (counts.opened_mismatch > 0) return 'shortage_profit'
+  if (counts.not_in_query > 0) return 'profit'
+  if (counts.wrong_location > 0) return 'put_away'
+  return ''
 }

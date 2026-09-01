@@ -88,10 +88,15 @@ export async function cancelSession(sessionId) {
   return Array.isArray(data) ? data[0] : data
 }
 
-/** The reason / action / done follow-up on one discrepancy. */
-export async function saveFollowup(scanId, { reason, action, done, remark }) {
-  const { data, error } = await supabase.rpc('set_scan_followup', {
-    p_scan_id: scanId,
+/**
+ * The reason / action / done for a WHOLE count.
+ *
+ * One decision per location per day, not per case - the user's call: "no need
+ * reason for every case number".
+ */
+export async function saveFollowup(sessionId, { reason, action, done, remark }) {
+  const { data, error } = await supabase.rpc('set_session_followup', {
+    p_session_id: sessionId,
     p_reason: reason ?? null,
     p_action: action ?? null,
     p_done: !!done,
@@ -99,6 +104,27 @@ export async function saveFollowup(scanId, { reason, action, done, remark }) {
   })
   if (error) throw new Error(error.message)
   return Array.isArray(data) ? data[0] : data
+}
+
+/** One row per day per person, newest first. Grouped in WIB by the view. */
+export async function dailyStats(limit = 90) {
+  const { data, error } = await supabase
+    .from('cycle_count_daily')
+    .select('*')
+    .order('count_date', { ascending: false })
+    .limit(limit)
+  if (error) throw new Error(error.message)
+  return data ?? []
+}
+
+/** Totals per admin, for the dashboard. */
+export async function adminStats() {
+  const { data, error } = await supabase
+    .from('cycle_count_by_admin')
+    .select('*')
+    .order('scanned', { ascending: false })
+  if (error) throw new Error(error.message)
+  return data ?? []
 }
 
 /** Case numbers Query expected here that were never scanned. */
@@ -132,9 +158,7 @@ export async function sessionScans(sessionId) {
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
       .from('cycle_count_scan')
-      .select(
-        'id, case_no, result, system_locations, query_opened, reason, action, done, remark, scanned_at'
-      )
+      .select('id, case_no, result, system_locations, query_opened, scanned_at')
       .eq('session_id', sessionId)
       .order('scanned_at')
       .order('id')

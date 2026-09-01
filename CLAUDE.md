@@ -25,7 +25,7 @@ real data and is not obvious from the code.
 | Partial search by last 4 digits | **Working, verified** — `06_partial_search.sql` is applied |
 | Search by case number | **Working** — `07_case_search.sql` is applied; 183ms vs a 456ms un-indexed control |
 | Vercel deploy | Live, auto-deploys from `main` |
-| Cycle count | **Built** — needs `08_cycle_count.sql` **and** `09_cycle_count_v2.sql`. Scan, 5 buckets, location lock and the reason/action worklist done; adjustment file and statistics not started |
+| Cycle count | **Working** — needs `08` → `09` → `10` → `11`. Scan, 5 buckets, location lock, one decision per count, CSV export and the dashboard are done |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Not started** — has open questions, see below |
 
@@ -405,15 +405,39 @@ Other decisions worth keeping:
   display name. `08` stored only the name, so `openSession()` resumed *any*
   unfinished session — a second admin would have been dropped straight into the
   first admin's count. A name is not an identity.
+- **The reason / action / status is per COUNT, not per case** (`11`). The user
+  asked for this directly: *"no need reason for every case number. make reason
+  action, status for 1 location."* One location on one day gets one decision,
+  so the per-case columns were dropped rather than left behind to rot.
 - **The entry point is on the admin page only**, never the top bar. The search
   page is public and belongs to the operation team.
 - **Session timestamps are correct.** They come from `now()`, not from the
   imported text columns, so the 7-hour bug below does not touch them. It will
   still matter for grouping into weeks and months.
 
+**The dashboard groups days in Asia/Jakarta, not UTC.** `cycle_count_daily`
+uses `(started_at at time zone 'Asia/Jakarta')::date`. A count at 06:00 WIB is
+23:00 UTC *the day before*, so grouping in UTC would silently move every
+early-morning count into yesterday and make the daily figures disagree with
+the warehouse's own memory. `localDate()` in `cycleCountExport.js` does the
+same for the CSV, and the tests assert the 23:30-UTC case explicitly.
+
+This is **not** the same as the known `inbound_time` bug below, which is about
+imported *text* timestamps being read as UTC. That one is still open and does
+not touch the cycle count, whose timestamps come from `now()`.
+
+**Accuracy has exactly one definition**, `accuracy()` in `cycleCount.js`. The
+SQL views deliberately return raw counts and no percentage, so the formula
+cannot drift between the screen, the CSV and the database.
+
 `src/lib/cycleCount.js` is the pure half (reading a scan, the buckets,
 accuracy, the report ordering) and is covered by `scripts/test-cycle-count.mjs`
-with no database. `cycleCountData.js` holds the Supabase calls.
+with no database. `cycleCountExport.js` builds both CSVs and is covered by
+`test-cycle-count-export.mjs` — the session result is shaped like their own
+Compare sheet, `Part number` and `Qty` included and empty, so it pastes into
+the template they already use. `cycleCountData.js` holds the Supabase calls,
+and `download.js` is the six lines that hand a Blob to the browser (split out
+of `export.js`, which drags in Supabase and fflate).
 
 ### Search does three queries, not a join
 
@@ -544,8 +568,10 @@ Run these before claiming anything works:
 ```powershell
 $env:Path = "$env:Path;$env:LOCALAPPDATA\nodejs"
 
-node scripts/test-parser.mjs        # parser vs the real files, all layouts
-node scripts/test-multifile.mjs     # 39 raw files parsed as one upload
+node scripts/test-parser.mjs             # parser vs the real files, all layouts
+node scripts/test-multifile.mjs          # 39 raw files parsed as one upload
+node scripts/test-cycle-count.mjs        # buckets, accuracy, the worklist
+node scripts/test-cycle-count-export.mjs # both cycle count CSVs
 node --env-file=.env scripts/smoke-test.mjs   # search queries vs live Supabase
 npm run build
 ```
@@ -596,16 +622,15 @@ new file shape appears.
 2. **Re-check the Vercel site** — several commits have deployed since the user
    last looked at it.
 
-3. **Run `supabase/09_cycle_count_v2.sql`.** `08` is already applied and is
-   wrong on its own — it filters the expected list to full cases, which hides
-   the opened-case discovery the count exists to make.
-4. **The WMS adjustment file.** The user will supply a sample — *"we need
-   adjustment delete form query (called shortage) and input again with full
-   case (porfit) next ill show the sample file adjustment."* The worklist rows
-   (`reportRows()` in `cycleCount.js`) already carry the reason, the chosen
-   action and the done flag, so they should feed straight into it.
-5. **Cycle count statistics per week and month.** Not started. **Fix the
-   timezone below first** — this is the feature that exposes it.
+3. **Run `supabase/11_cycle_count_session_followup.sql`.** `08` → `09` → `10`
+   are applied; `11` moves the follow-up onto the session and adds the
+   statistics views.
+4. **The WMS adjustment file, if a specific format is needed.** The result CSV
+   is deliberately shaped like their Compare sheet so an adjustment document
+   can be built from it by hand today. The user said they would show a sample
+   of the real WMS file — *"we need adjustment delete form query (called
+   shortage) and input again with full case (porfit)"* — so a direct generator
+   may still be wanted. Nothing is blocked on it.
 
 ### Open questions, blocking the Breakdown feature
 

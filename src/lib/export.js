@@ -118,15 +118,7 @@ export async function exportInventoryCsv({ onProgress, shouldCancel } = {}) {
   }
 }
 
-/** Hand the blob to the browser as a download. */
-export function saveBlob(blob, filename) {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  // Give the download a tick to start before the URL is revoked.
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
+// Lives in download.js now, so a page can offer a download without dragging
+// this module's Supabase and fflate imports along. Re-exported so existing
+// callers keep importing everything about the export from one place.
+export { saveBlob } from './download'

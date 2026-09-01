@@ -1169,3 +1169,56 @@ input[type='file'] {
 .ok {
   color: var(--ok-text);
 }
+
+/* One decision per count: reason, action, remark, done. */
+.ccfollowup {
+  display: grid;
+  grid-template-columns: 2fr 1.2fr 2fr auto;
+  gap: 12px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+@media (max-width: 720px) {
+  .ccfollowup {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+}
+
+.ccfollowup label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ccfollowup input[type='text'],
+.ccfollowup select {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+
+.ccfollowup input[type='text']:focus,
+.ccfollowup select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.ccfollowup .cccheck {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+  padding-bottom: 9px;
+}
+
+.ccfollowup .cccheck input {
+  width: 18px;
+  height: 18px;
+}
