@@ -31,7 +31,8 @@ const session = {
   started_at: '2026-08-31T02:55:00Z',
   started_by: 'doni',
   reason: 'Wrong put away',
-  action: 'shortage_profit',
+  // A list now - this count needed two actions.
+  action: ['shortage', 'profit'],
   done: true,
   remark: null,
 }
@@ -97,15 +98,23 @@ check('no query location renders blank', rows[2]['Query Location'] === '',
 
 console.log('\n--- one decision, repeated on every row ---')
 check('the reason is on every row', rows.every((r) => r.Reason === 'Wrong put away'), 'ok')
-check('the action is the LABEL, not the code',
+// Several actions read as one phrase, and as LABELS not codes.
+check('two actions join into their own wording',
       rows.every((r) => r.Action === 'Shortage + Profit'), rows[0].Action)
 check('done is marked', rows.every((r) => r.Done === 'done'), rows[0].Done)
+
+const oneAction = resultRows({ ...session, action: ['put_away'] }, scans, [])
+check('a single action reads plainly', oneAction[0].Action === 'Put away', oneAction[0].Action)
 
 const undecided = resultRows(
   { ...session, reason: null, action: null, done: false, remark: null }, scans, []
 )
-check('an undecided count leaves them blank',
-      undecided.every((r) => r.Reason === '' && r.Action === '' && r.Done === ''), 'ok')
+check('an undecided count has no reason or action',
+      undecided.every((r) => r.Reason === '' && r.Action === ''), 'ok')
+// "in progress" rather than blank: an empty cell reads as a missing value, not
+// as work that has not been done yet.
+check('and says the adjustment is in progress',
+      undecided.every((r) => r.Done === 'in progress'), undecided[0].Done)
 
 console.log('\n--- the CSV itself ---')
 
@@ -141,7 +150,7 @@ console.log('\n--- every count, every admin ---')
 // and "never scanned" has already been resolved to result = 'not_checked'.
 const viewRows = [
   { session_id: 's1', location: 'TRANSIT B02', started_at: '2026-08-30T02:00:00Z',
-    started_by: 'doni', reason: 'Wrong put away', action: 'put_away', done: true,
+    started_by: 'doni', reason: 'Wrong put away', action: ['put_away'], done: true,
     remark: null, case_no: 'OLD-1', result: 'wrong_location', query_opened: false,
     system_locations: ['REC-TRANSIT-01'] },
   { session_id: 's2', location: 'STORAGE-A001', started_at: '2026-08-31T02:00:00Z',
@@ -188,8 +197,9 @@ check('each row keeps its own checker',
 check('a decision does not leak between counts',
       older.Action === 'Put away' && newer.Action === '',
       `"${older.Action}" / "${newer.Action}"`)
-check('done does not leak either',
-      older.Done === 'done' && newer.Done === '', `"${older.Done}" / "${newer.Done}"`)
+check('the status does not leak either',
+      older.Done === 'done' && newer.Done === 'in progress',
+      `"${older.Done}" / "${newer.Done}"`)
 
 // The finding that matters most must survive this path too.
 const opened = arows.find((r) => r['Case Number'] === 'NEW-3')

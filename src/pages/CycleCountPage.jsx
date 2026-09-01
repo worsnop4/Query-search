@@ -393,7 +393,11 @@ function ScanScreen({ session, onFinished, onError }) {
 
 function SessionFollowup({ summary, counts, onError }) {
   const [reason, setReason] = useState(summary.reason ?? '')
-  const [action, setAction] = useState(summary.action ?? suggestedAction(counts))
+  // A list now: one count can need a put away AND a shortage. Falls back to
+  // the suggestion only when nothing has been decided yet.
+  const [action, setAction] = useState(
+    summary.action?.length ? summary.action : suggestedAction(counts)
+  )
   const [done, setDone] = useState(!!summary.done)
   const [remark, setRemark] = useState(summary.remark ?? '')
   const [saving, setSaving] = useState(false)
@@ -435,23 +439,31 @@ function SessionFollowup({ summary, counts, onError }) {
           />
         </label>
 
-        <label>
-          <span className="muted small">Action</span>
-          <select
-            value={action}
-            onChange={(e) => {
-              setAction(e.target.value)
-              save({ action: e.target.value })
-            }}
-          >
-            <option value="">Choose...</option>
-            {ACTIONS.map((a) => (
-              <option key={a.value} value={a.value}>
+        {/* Checkboxes, not a dropdown: a location can need more than one. */}
+        <fieldset className="ccactionset">
+          <legend className="muted small">Action</legend>
+          {ACTIONS.map((a) => {
+            const on = action.includes(a.value)
+            return (
+              <label key={a.value} className={`ccchip${on ? ' on' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={() => {
+                    // Rebuilt from ACTIONS so the stored order is always the
+                    // same, whatever order the boxes were ticked in.
+                    const next = ACTIONS.filter((x) =>
+                      x.value === a.value ? !on : action.includes(x.value)
+                    ).map((x) => x.value)
+                    setAction(next)
+                    save({ action: next })
+                  }}
+                />
                 {a.label}
-              </option>
-            ))}
-          </select>
-        </label>
+              </label>
+            )
+          })}
+        </fieldset>
 
         <label>
           <span className="muted small">Remark</span>
@@ -465,17 +477,35 @@ function SessionFollowup({ summary, counts, onError }) {
           />
         </label>
 
-        <label className="cccheck">
-          <input
-            type="checkbox"
-            checked={done}
-            onChange={(e) => {
-              setDone(e.target.checked)
-              save({ done: e.target.checked })
-            }}
-          />
-          <span>Adjustment done</span>
-        </label>
+        {/* Two states, said out loud. A bare tickbox left "not ticked"
+            ambiguous between "not started" and "someone forgot". */}
+        <fieldset className="ccactionset">
+          <legend className="muted small">Adjustment</legend>
+          <div className="cctoggle" role="group" aria-label="Adjustment status">
+            <button
+              type="button"
+              className={done ? '' : 'on'}
+              aria-pressed={!done}
+              onClick={() => {
+                setDone(false)
+                save({ done: false })
+              }}
+            >
+              In progress
+            </button>
+            <button
+              type="button"
+              className={done ? 'on' : ''}
+              aria-pressed={done}
+              onClick={() => {
+                setDone(true)
+                save({ done: true })
+              }}
+            >
+              Done
+            </button>
+          </div>
+        </fieldset>
       </div>
 
       <p className="muted small">
@@ -1386,7 +1416,7 @@ function RecentSessions({ onOpen }) {
                       className="ghost small"
                       onClick={() => onOpen(s.id)}
                     >
-                      {s.action || s.reason ? 'Open' : 'Set action'}
+                      {s.action?.length || s.reason ? 'Open' : 'Set action'}
                     </button>
                   </td>
                 </tr>

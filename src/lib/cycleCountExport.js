@@ -8,7 +8,7 @@
 // The `.js` extensions are required, not stylistic: Vite resolves without
 // them, plain Node does not, and this file has to run under both.
 import { toCsv } from './csv.js'
-import { RESULTS, ACTION_LABEL, bucketOf } from './cycleCount.js'
+import { RESULTS, actionLabel, bucketOf } from './cycleCount.js'
 
 /**
  * Columns of the session result, deliberately shaped like the Compare sheet of
@@ -85,8 +85,9 @@ function exportRow(no, session, case_no, bucket, where) {
     Status: statusOf(bucket),
     Finding: RESULTS[bucket]?.label ?? bucket,
     Reason: session.reason ?? '',
-    Action: session.action ? (ACTION_LABEL[session.action] ?? session.action) : '',
-    Done: session.done ? 'done' : '',
+    // Several actions can apply, and they read as one phrase: "Shortage + Profit".
+    Action: actionLabel(session.action),
+    Done: session.done ? 'done' : 'in progress',
     Remark: session.remark ?? '',
   }
 }

@@ -1340,3 +1340,69 @@ table select {
   font-size: 13px;
   max-width: 150px;
 }
+
+/* Action is a set of choices now, and the adjustment status is two named
+   states rather than a bare tickbox. */
+.ccactionset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.ccactionset legend {
+  padding: 0;
+  margin-bottom: 4px;
+}
+
+.ccchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  margin: 0 6px 0 0;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  font-size: 13px;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.ccchip.on {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.ccchip input {
+  margin: 0;
+}
+
+.cctoggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.cctoggle button {
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.cctoggle button + button {
+  border-left: 1px solid var(--border);
+}
+
+.cctoggle button.on {
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 600;
+}

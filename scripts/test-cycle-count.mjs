@@ -9,7 +9,7 @@ import {
   RESULTS,
   RESULT_ORDER,
   ACTIONS,
-  ACTION_LABEL,
+  actionLabel,
   bucketOf,
   readScan,
   summarise,
@@ -169,31 +169,57 @@ check('a perfect count has an empty worklist',
       reportRows([{ case_no: 'A', result: 'match', query_opened: false }], []).length === 0,
       '0')
 
-console.log('\n--- actions: one decision for the whole count ---')
+console.log('\n--- actions: a LIST, because one count can need several ---')
 
-check('the four actions the user asked for',
-      ACTIONS.map((a) => a.value).join(',') === 'put_away,shortage,profit,shortage_profit',
+check('the three actions', ACTIONS.map((a) => a.value).join(',') === 'put_away,shortage,profit',
       ACTIONS.map((a) => a.value).join(','))
-check('shortage + profit is labelled properly',
-      ACTION_LABEL.shortage_profit === 'Shortage + Profit', ACTION_LABEL.shortage_profit)
+// The old combined value is gone: ticking two boxes IS the pair, and keeping
+// both would give two ways to record the same decision.
+check('there is no combined shortage_profit option',
+      !ACTIONS.some((a) => a.value === 'shortage_profit'), 'gone')
+check('ticking both still reads as their phrase',
+      actionLabel(['shortage', 'profit']) === 'Shortage + Profit',
+      actionLabel(['shortage', 'profit']))
+check('the label order follows ACTIONS, not the ticking order',
+      actionLabel(['profit', 'put_away']) === 'Put away + Profit',
+      actionLabel(['profit', 'put_away']))
+check('one action reads plainly', actionLabel(['put_away']) === 'Put away',
+      actionLabel(['put_away']))
+check('no action is an empty label', actionLabel([]) === '', `"${actionLabel([])}"`)
+check('null does not throw', actionLabel(null) === '', `"${actionLabel(null)}"`)
+// Rows written before the migration could still hand us a bare string.
+check('a single string is tolerated', actionLabel('shortage') === 'Shortage',
+      actionLabel('shortage'))
+check('an unknown value is ignored, not printed',
+      actionLabel(['nonsense', 'profit']) === 'Profit', actionLabel(['nonsense', 'profit']))
 
-// Driven by the worst finding: a case Query has as opened but was actually
-// full has to come off and go back on, so it outranks the others.
-check('an opened mismatch suggests shortage + profit',
-      suggestedAction({ opened_mismatch: 1, not_in_query: 3, wrong_location: 9 })
-        === 'shortage_profit', 'shortage_profit')
-check('otherwise not in query suggests profit',
-      suggestedAction({ opened_mismatch: 0, not_in_query: 1, wrong_location: 9 })
-        === 'profit', 'profit')
-check('otherwise wrong location suggests put away',
-      suggestedAction({ opened_mismatch: 0, not_in_query: 0, wrong_location: 1 })
-        === 'put_away', 'put_away')
+// Every finding contributes now, which is the point of allowing several.
+const sug = (c) => suggestedAction(c).join(',')
+check('an opened mismatch suggests shortage and profit',
+      sug({ opened_mismatch: 1, not_in_query: 0, wrong_location: 0 }) === 'shortage,profit',
+      sug({ opened_mismatch: 1, not_in_query: 0, wrong_location: 0 }))
+check('wrong location suggests put away',
+      sug({ opened_mismatch: 0, not_in_query: 0, wrong_location: 1 }) === 'put_away',
+      sug({ opened_mismatch: 0, not_in_query: 0, wrong_location: 1 }))
+check('not in query suggests profit',
+      sug({ opened_mismatch: 0, not_in_query: 1, wrong_location: 0 }) === 'profit',
+      sug({ opened_mismatch: 0, not_in_query: 1, wrong_location: 0 }))
+// All three findings at once: the case the old single-value action could not
+// express at all.
+check('all three findings suggest all three actions',
+      sug({ opened_mismatch: 1, not_in_query: 2, wrong_location: 3 })
+        === 'put_away,shortage,profit',
+      sug({ opened_mismatch: 1, not_in_query: 2, wrong_location: 3 }))
+check('profit is not suggested twice',
+      suggestedAction({ opened_mismatch: 1, not_in_query: 1, wrong_location: 0 })
+        .filter((a) => a === 'profit').length === 1, 'once')
 check('a clean count suggests nothing',
-      suggestedAction({ opened_mismatch: 0, not_in_query: 0, wrong_location: 0 }) === '', '""')
-check('missing counts do not throw', suggestedAction(null) === '', '""')
+      suggestedAction({ opened_mismatch: 0, not_in_query: 0, wrong_location: 0 }).length === 0,
+      '[]')
+check('missing counts do not throw', suggestedAction(null).length === 0, '[]')
 check('every suggestion is a real action',
-      [{ opened_mismatch: 1 }, { not_in_query: 1 }, { wrong_location: 1 }]
-        .every((c) => ACTIONS.some((a) => a.value === suggestedAction(c))), 'ok')
+      suggestedAction({ opened_mismatch: 1, not_in_query: 1, wrong_location: 1 })
+        .every((v) => ACTIONS.some((a) => a.value === v)), 'ok')
 
 console.log('\n--- adding the admins together, per day (the chart) ---')
 

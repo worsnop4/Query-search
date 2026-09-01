@@ -56,22 +56,36 @@ export const RESULT_ORDER = [
 ]
 
 /**
- * What to do about a discrepancy. These are the user's own four, and they map
- * onto the workbook's "DO" column.
+ * What to do about a count. More than one may apply, so this is a LIST.
  *
+ * put_away  - the case is somewhere else; move it in the WMS to where it is
  * shortage  - take it off Query, the stock is not what Query thinks
  * profit    - put it back on Query in the state it was actually found
- * both      - the pair used when a case has to be corrected in place, which is
- *             what an opened-in-Query-but-actually-full case needs
+ *
+ * There is deliberately no combined "Shortage + Profit" entry any more: with a
+ * list, ticking both IS that pair, and a separate combined value would give
+ * two different ways to record the same decision.
  */
 export const ACTIONS = [
   { value: 'put_away', label: 'Put away' },
   { value: 'shortage', label: 'Shortage' },
   { value: 'profit', label: 'Profit' },
-  { value: 'shortage_profit', label: 'Shortage + Profit' },
 ]
 
 export const ACTION_LABEL = Object.fromEntries(ACTIONS.map((a) => [a.value, a.label]))
+
+/**
+ * The chosen actions as one readable phrase: "Shortage + Profit".
+ *
+ * Ordered by ACTIONS, not by how they were ticked, so the same decision always
+ * reads the same way in the file and on the screen.
+ */
+export function actionLabel(actions) {
+  const list = Array.isArray(actions) ? actions : actions ? [actions] : []
+  return ACTIONS.filter((a) => list.includes(a.value))
+    .map((a) => a.label)
+    .join(' + ')
+}
 
 /**
  * Which bucket a recorded scan belongs to.
@@ -314,18 +328,21 @@ export function totalsByDay(days) {
 }
 
 /**
- * The action a count most likely needs, offered as the default for the whole
- * session. A suggestion only - the admin chooses.
+ * The actions a count most likely needs, ticked by default. A suggestion only -
+ * the admin decides.
  *
- * Driven by the worst thing found, in the order below: a case Query has as
- * opened when it was actually full has to come off and go back on, which is
- * the pair; a case Query does not know about is a profit; a case in the wrong
- * place just gets put away.
+ * Every finding contributes now rather than only the worst one, which is the
+ * point of allowing several: a location with cases in the wrong place AND a
+ * case Query has as opened genuinely needs a put away AND a shortage AND a
+ * profit, and before this it could only say one of them.
  */
 export function suggestedAction(counts) {
-  if (!counts) return ''
-  if (counts.opened_mismatch > 0) return 'shortage_profit'
-  if (counts.not_in_query > 0) return 'profit'
-  if (counts.wrong_location > 0) return 'put_away'
-  return ''
+  if (!counts) return []
+  const out = []
+  if (counts.wrong_location > 0) out.push('put_away')
+  // A case Query has as opened but found full has to come off and go back on.
+  if (counts.opened_mismatch > 0) out.push('shortage', 'profit')
+  // A case Query has never heard of is pure profit.
+  if (counts.not_in_query > 0 && !out.includes('profit')) out.push('profit')
+  return ACTIONS.filter((a) => out.includes(a.value)).map((a) => a.value)
 }

@@ -25,7 +25,7 @@ real data and is not obvious from the code.
 | Partial search by last 4 digits | **Working, verified** — `06_partial_search.sql` is applied |
 | Search by case number | **Working** — `07_case_search.sql` is applied; 183ms vs a 456ms un-indexed control |
 | Vercel deploy | Live, auto-deploys from `main` |
-| Cycle count | **Working** — needs `08` → … → `15`. Dashboard-first, scan with undo, 5 buckets, location lock, per-area totals, monthly plan, CSV exports and the WMS put-away `.xls` |
+| Cycle count | **Working** — needs `08` → … → `16`. Dashboard-first, scan with undo, 5 buckets, location lock, per-area totals, monthly plan, CSV exports and the WMS put-away `.xls` |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Not started** — has open questions, see below |
 
@@ -409,6 +409,16 @@ Other decisions worth keeping:
   asked for this directly: *"no need reason for every case number. make reason
   action, status for 1 location."* One location on one day gets one decision,
   so the per-case columns were dropped rather than left behind to rot.
+- **`action` is a LIST** (`16`), because one location can need a put away *and*
+  a shortage. The old combined `shortage_profit` value was migrated to
+  `{shortage, profit}` and removed: with a list, ticking both **is** that pair,
+  and keeping the combined value too would give two ways to record one
+  decision. `actionLabel()` still renders it as *"Shortage + Profit"*, which is
+  the wording they already use.
+- **`done` shows as "In progress" / "Done"**, not a tickbox. It is still a
+  boolean — two states need nothing more — but an unticked box was ambiguous
+  between "not started" and "someone forgot". The CSV says `in progress`
+  rather than leaving the cell blank, for the same reason.
 - **The entry point is on the admin page only**, never the top bar. The search
   page is public and belongs to the operation team.
 - **Session timestamps are correct.** They come from `now()`, not from the
