@@ -172,14 +172,37 @@ export async function planEntries(fromDate, toDate) {
   return data ?? []
 }
 
-export async function addPlanEntry(planDate, location, note = null) {
+export async function addPlanEntry(planDate, location, assignedUid = null, note = null) {
   const { data, error } = await supabase.rpc('add_plan_entry', {
     p_plan_date: planDate,
     p_location: location,
+    p_assigned_uid: assignedUid,
     p_note: note,
   })
   if (error) throw new Error(error.message)
   return Array.isArray(data) ? data[0] : data
+}
+
+export async function assignPlanEntry(id, assignedUid) {
+  const { data, error } = await supabase.rpc('assign_plan_entry', {
+    p_id: id,
+    p_assigned_uid: assignedUid,
+  })
+  if (error) throw new Error(error.message)
+  return Array.isArray(data) ? data[0] : data
+}
+
+/**
+ * Everyone who can be given a plan entry.
+ *
+ * Every account in this project is an admin - they are created by hand and
+ * there is no signup - so the user list is the assignee list. Display names
+ * only; the function never returns an email.
+ */
+export async function adminList() {
+  const { data, error } = await supabase.rpc('admin_list')
+  if (error) throw new Error(error.message)
+  return data ?? []
 }
 
 export async function removePlanEntry(id) {

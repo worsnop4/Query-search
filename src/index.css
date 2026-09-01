@@ -1325,3 +1325,18 @@ input[type='file'] {
   background: transparent;
   border-color: var(--border);
 }
+
+/* "Show: <admin>" filter, sitting opposite the plan heading. */
+.ccfilter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+/* Selects inside a table row stay compact so the row does not grow. */
+table select {
+  padding: 5px 8px;
+  font-size: 13px;
+  max-width: 150px;
+}

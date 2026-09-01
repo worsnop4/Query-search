@@ -33,6 +33,8 @@ import {
   planEntries,
   addPlanEntry,
   removePlanEntry,
+  assignPlanEntry,
+  adminList,
 } from '../lib/cycleCountData'
 import {
   buildResultCsv,
@@ -810,6 +812,16 @@ function PlanPage({ onError, onBack }) {
   const [term, setTerm] = useState('')
   const [matches, setMatches] = useState([])
   const [busy, setBusy] = useState(false)
+  const [admins, setAdmins] = useState([])
+  // Who the NEXT entry is for, and which admin's plan is on screen.
+  const [assignee, setAssignee] = useState('')
+  const [filter, setFilter] = useState('')
+
+  useEffect(() => {
+    adminList()
+      .then(setAdmins)
+      .catch((err) => onError(err.message))
+  }, [onError])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -840,9 +852,22 @@ function PlanPage({ onError, onBack }) {
     setBusy(true)
     onError(null)
     try {
-      await addPlanEntry(date, location)
+      await addPlanEntry(date, location, assignee || null)
       setTerm('')
       setMatches([])
+      await load()
+    } catch (err) {
+      onError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function reassign(id, uid) {
+    setBusy(true)
+    onError(null)
+    try {
+      await assignPlanEntry(id, uid || null)
       await load()
     } catch (err) {
       onError(err.message)
@@ -863,7 +888,12 @@ function PlanPage({ onError, onBack }) {
     }
   }
 
-  const done = rows.filter((r) => r.done).length
+  // Filtering only what is SHOWN; the counts below describe the filtered list,
+  // so "12 planned, 3 done" always matches the rows underneath it.
+  const shown = filter
+    ? rows.filter((r) => r.assigned_to_uid === filter)
+    : rows
+  const done = shown.filter((r) => r.done).length
 
   return (
     <>
@@ -889,6 +919,17 @@ function PlanPage({ onError, onBack }) {
           <label>
             <span className="muted small">Plan date</span>
             <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </label>
+          <label>
+            <span className="muted small">For</span>
+            <select value={assignee} onChange={(e) => setAssignee(e.target.value)}>
+              <option value="">Nobody yet</option>
+              {admins.map((a) => (
+                <option key={a.uid} value={a.uid}>
+                  {a.display_name}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="grow">
             <span className="muted small">Add a location</span>
@@ -917,6 +958,8 @@ function PlanPage({ onError, onBack }) {
                   <span className="mono">{m.location}</span>
                   <span className="muted small">
                     {nf.format(m.cases)} case{m.cases === 1 ? '' : 's'} &middot; add to {date}
+                    {assignee &&
+                      ` for ${admins.find((a) => a.uid === assignee)?.display_name ?? ''}`}
                   </span>
                 </button>
               </li>
@@ -926,17 +969,34 @@ function PlanPage({ onError, onBack }) {
       </div>
 
       <div className="card">
-        <h3>
-          {loading
-            ? 'Loading...'
-            : `${nf.format(rows.length)} planned, ${nf.format(done)} done`}
-        </h3>
+        <div className="cchead">
+          <h3>
+            {loading
+              ? 'Loading...'
+              : `${nf.format(shown.length)} planned, ${nf.format(done)} done`}
+          </h3>
+          <label className="ccfilter">
+            <span className="muted small">Show</span>
+            <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+              <option value="">Everyone</option>
+              {admins.map((a) => (
+                <option key={a.uid} value={a.uid}>
+                  {a.display_name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
 
-        {!loading && rows.length === 0 && (
-          <p className="muted small">Nothing planned for this month yet.</p>
+        {!loading && shown.length === 0 && (
+          <p className="muted small">
+            {rows.length === 0
+              ? 'Nothing planned for this month yet.'
+              : 'Nothing planned for that admin this month.'}
+          </p>
         )}
 
-        {rows.length > 0 && (
+        {shown.length > 0 && (
           <div className="tablewrap">
             <table>
               <thead>
@@ -944,17 +1004,33 @@ function PlanPage({ onError, onBack }) {
                   <th>Date</th>
                   <th>Location</th>
                   <th>Area</th>
+                  <th>For</th>
                   <th>Done</th>
                   <th>Last counted</th>
                   <th />
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {shown.map((r) => (
                   <tr key={r.id} className={r.done ? 'ccdone' : undefined}>
                     <td className="mono small">{r.plan_date}</td>
                     <td className="mono">{r.location}</td>
                     <td className="small">{r.area || '—'}</td>
+                    <td>
+                      <select
+                        value={r.assigned_to_uid ?? ''}
+                        onChange={(e) => reassign(r.id, e.target.value)}
+                        disabled={busy}
+                        aria-label={`Who counts ${r.location}`}
+                      >
+                        <option value="">Nobody yet</option>
+                        {admins.map((a) => (
+                          <option key={a.uid} value={a.uid}>
+                            {a.display_name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
                     <td>
                       {r.done ? (
                         <span className="pill ok">Done</span>
@@ -963,9 +1039,13 @@ function PlanPage({ onError, onBack }) {
                       )}
                     </td>
                     <td className="small">
-                      {r.last_counted_at
-                        ? `${when(r.last_counted_at)} · ${r.last_counted_by}`
-                        : '—'}
+                      {/* Who actually counted it, which is not always who it
+                          was assigned to - and the work still counts. */}
+                      {r.done && r.done_by
+                        ? `${r.done_by} on the day`
+                        : r.last_counted_at
+                          ? `${when(r.last_counted_at)} · ${r.last_counted_by}`
+                          : '—'}
                     </td>
                     <td className="num">
                       <button
@@ -1107,6 +1187,10 @@ function Dashboard({ onError, onStart, onPlan }) {
         </button>
       </div>
 
+      {/* The chart first: it is the whole picture at a glance, and the tables
+          below are for reading the detail off afterwards. */}
+      <DayChart days={days} />
+
       {areas.length > 0 && (
         <>
           <h3>By area</h3>
@@ -1150,8 +1234,6 @@ function Dashboard({ onError, onStart, onPlan }) {
           </div>
         </>
       )}
-
-      <DayChart days={days} />
 
       {admins.length > 0 && (
         <>

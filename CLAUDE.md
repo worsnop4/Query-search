@@ -527,6 +527,18 @@ whose local Jakarta date matches the plan date, so the plan cannot claim work
 that was not done. `last_counted_at` is exposed alongside for the common case
 of counting a day late.
 
+Each entry is **assigned to an admin** (`14`), so everyone has their own list —
+`admin_list()` is the assignee list, and since every account here is an admin
+created by hand with no signup, that is simply the user list. Display names
+only, never emails, the same rule `active_admins` follows.
+
+**`done` still means counted by ANYONE.** If Dian Ayu counts a location
+assigned to Doni, the work is done and the plan says so; a plan that only
+ticked for the named person would report the warehouse as behind when it is
+not. The assignee is who was *asked*, not a condition on the answer —
+`done_by` records who actually did it. Same reason `unique (plan_date,
+location)` stays: one location on one day is one job, whoever it belongs to.
+
 ### Search does three queries, not a join
 
 `SearchPage` queries `inventory` directly (paginated, `count: 'exact'`), fetches
