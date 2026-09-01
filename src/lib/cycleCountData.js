@@ -144,6 +144,49 @@ export async function allCountRows(onProgress) {
   }
 }
 
+/** Counted totals per area, and how big each area actually is. */
+export async function areaStats() {
+  const [counted, sizes] = await Promise.all([
+    supabase.from('cycle_count_by_area').select('*'),
+    supabase.from('area_sizes').select('*'),
+  ])
+  if (counted.error) throw new Error(counted.error.message)
+  if (sizes.error) throw new Error(sizes.error.message)
+  return { counted: counted.data ?? [], sizes: sizes.data ?? [] }
+}
+
+// ---------------------------------------------------------------------------
+// The monthly plan
+// ---------------------------------------------------------------------------
+
+/** Plan entries between two ISO dates, with whether each actually happened. */
+export async function planEntries(fromDate, toDate) {
+  const { data, error } = await supabase
+    .from('cycle_count_plan_status')
+    .select('*')
+    .gte('plan_date', fromDate)
+    .lte('plan_date', toDate)
+    .order('plan_date')
+    .order('location')
+  if (error) throw new Error(error.message)
+  return data ?? []
+}
+
+export async function addPlanEntry(planDate, location, note = null) {
+  const { data, error } = await supabase.rpc('add_plan_entry', {
+    p_plan_date: planDate,
+    p_location: location,
+    p_note: note,
+  })
+  if (error) throw new Error(error.message)
+  return Array.isArray(data) ? data[0] : data
+}
+
+export async function removePlanEntry(id) {
+  const { error } = await supabase.rpc('remove_plan_entry', { p_id: id })
+  if (error) throw new Error(error.message)
+}
+
 /** Totals per admin, for the dashboard. */
 export async function adminStats() {
   const { data, error } = await supabase

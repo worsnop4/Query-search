@@ -464,6 +464,69 @@ the template they already use. `cycleCountData.js` holds the Supabase calls,
 and `download.js` is the six lines that hand a Blob to the browser (split out
 of `export.js`, which drags in Supabase and fflate).
 
+### The area classification was already built, and it matches their report
+
+`D:\Daily\Cycle Count\REPORT ACCURACY.xlsx` (read 1 Sep 2026) reports accuracy
+per area. **`calc_area()` in `setup.sql` already produces exactly those
+buckets** — written months earlier for the Breakdown. Verified against their
+own sheets, every location lands in the group their report puts it in:
+
+```
+HR sheet       LHS-PP01-401      -> HR
+TRANSIT sheet  CTR-BIW-001       -> Transit
+XINHAI sheet   XIN2-G02          -> XIN2
+Spot check     TRANSIT B02       -> Transit
+```
+
+Measured 1 Sep 2026 on 207,353 rows: **100%** carry an area, and **every one of
+the 8,724 locations has exactly one** — the per-area location counts sum to
+8,724 precisely. So freezing a location's area onto a count is unambiguous.
+
+| Their group | `area` | Cases | Locations |
+|---|---|---|---|
+| HR | `HR` | 14,133 | 1,562 |
+| Transit | `Transit` | 28,390 | 86 |
+| XINHAI | `XIN1`+`XIN2` | 14,973 | 342 |
+| DLOC | `DLOC` | 38,175 | 4,421 |
+| OF | `OF` | 46,019 | 2,171 |
+| OW SAIC | the other 10 | 5,779 | 142 |
+
+`AREA_GROUPS` in `cycleCount.js` encodes this, with **OW SAIC as a catch-all**
+so a new supplier area shows up there rather than vanishing from the dashboard.
+
+**This answered Breakdown open question 6** — is NON-SAIC only XIN1 and XIN2?
+Their report separates `XINHAI` from `OW SAIC`, so yes.
+
+Also settled from that file:
+
+- They count **HR, Transit, XINHAI and DLOC** today; OW SAIC is "maybe soon".
+  Areas with nothing counted still appear on the dashboard — that gap is the
+  point of having a plan.
+- **DLOC and OF are counted by PART NUMBER** in their report (`Check (PN)`),
+  everything else by case. The app is case-only; the user chose to keep the
+  part-number checking in Excel for now. Do not assume case counting covers
+  those two areas fully.
+- Their accuracy formula is `(Check − Unmatch) / Check`, which is **identical**
+  to `accuracy()` here. Verified: 415 checked, 42 unmatched → 0.898795.
+- The reason list in their `Grafik Issue` sheet has 14 fixed values (Pending
+  Open, Lost Scan, Wrong put away, Cancel Unpack, …). The user chose to
+  **keep reason as free text** anyway — do not "fix" this into a dropdown.
+- Four people count: Dian Ayu, Doni, Dian Fitri, DION.
+- Dates in the HR sheet running to November 2026 are **wrong data**, not a
+  forward plan. The user confirmed it.
+
+### The cycle count plan
+
+Their report's own instruction: *"Develop a cycle count plan on a monthly
+basis."* `cycle_count_plan` is one row per location per day. Any admin may
+edit it — the user's call, though one person keeps it in practice.
+
+**Whether a planned count happened is DERIVED, never ticked.** The
+`cycle_count_plan_status` view checks for a finished session on that location
+whose local Jakarta date matches the plan date, so the plan cannot claim work
+that was not done. `last_counted_at` is exposed alongside for the common case
+of counting a day late.
+
 ### Search does three queries, not a join
 
 `SearchPage` queries `inventory` directly (paginated, `count: 'exact'`), fetches

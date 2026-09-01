@@ -18,6 +18,8 @@ import {
   reportRows,
   suggestedAction,
   totalsByDay,
+  groupByArea,
+  AREA_GROUPS,
 } from '../src/lib/cycleCount.js'
 import { checker } from './lib.mjs'
 
@@ -238,6 +240,70 @@ check('no days is an empty list, not a crash', totalsByDay([]).length === 0, '0'
 check('string counts from PostgREST still add up',
       totalsByDay([{ count_date: 'x', started_by: 'a', clean_match: '3', scanned: '4' }])[0]
         .clean_match === 3, 'numeric')
+
+console.log('\n--- grouping by area, the way their report does ---')
+
+// The buckets calc_area() actually produces, with the real sizes measured on
+// 2026-09-01: 8,724 locations, and every one of them in exactly one area.
+const sizes = [
+  { area: 'OF', locations: 2171, cases: 46019 },
+  { area: 'DLOC', locations: 4421, cases: 38175 },
+  { area: 'Transit', locations: 86, cases: 28390 },
+  { area: 'XIN2', locations: 342, cases: 14973 },
+  { area: 'HR', locations: 1562, cases: 14133 },
+  { area: 'YANFENG', locations: 32, cases: 3421 },
+  { area: 'New Lingyun', locations: 34, cases: 778 },
+  { area: 'Baosteel', locations: 11, cases: 589 },
+]
+const countedAreas = [
+  { area: 'Transit', sessions: 3, locations: 3, scanned: 100, clean_match: 90,
+    opened_mismatch: 2, wrong_location: 6, not_in_query: 2, not_checked: 10 },
+  { area: 'HR', sessions: 1, locations: 1, scanned: 20, clean_match: 20,
+    opened_mismatch: 0, wrong_location: 0, not_in_query: 0, not_checked: 0 },
+  { area: 'XIN2', sessions: 1, locations: 1, scanned: 21, clean_match: 21,
+    opened_mismatch: 0, wrong_location: 0, not_in_query: 0, not_checked: 0 },
+  { area: 'YANFENG', sessions: 1, locations: 1, scanned: 5, clean_match: 4,
+    opened_mismatch: 0, wrong_location: 1, not_in_query: 0, not_checked: 0 },
+]
+const grouped = groupByArea(countedAreas, sizes)
+const at = (label) => grouped.find((g) => g.label === label)
+
+check('the report\'s group order is preserved',
+      grouped.map((g) => g.label).join(',') === 'HR,Transit,XINHAI,DLOC,OF,OW SAIC',
+      grouped.map((g) => g.label).join(','))
+
+// XIN1 and XIN2 are one group in their report, and XIN1 has never had rows.
+check('XIN2 lands under XINHAI', at('XINHAI').scanned === 21, String(at('XINHAI').scanned))
+check('and carries XIN2\'s size', at('XINHAI').totalCases === 14973,
+      String(at('XINHAI').totalCases))
+
+// Yanfeng is not named anywhere, so it must fall into OW SAIC rather than
+// vanish - a new supplier area should never silently disappear.
+check('an unnamed OW area falls into OW SAIC', at('OW SAIC').scanned === 5,
+      String(at('OW SAIC').scanned))
+check('OW SAIC sums every unnamed area',
+      at('OW SAIC').totalCases === 3421 + 778 + 589, String(at('OW SAIC').totalCases))
+
+// An area with nothing counted must stay on the dashboard: that gap is the
+// entire point of having a plan.
+check('DLOC is listed even with nothing counted',
+      at('DLOC') && at('DLOC').scanned === 0 && at('DLOC').totalCases === 38175,
+      `${at('DLOC')?.scanned} of ${at('DLOC')?.totalCases}`)
+check('OF too', at('OF').scanned === 0 && at('OF').totalLocations === 2171, 'listed')
+
+check('counted locations are shown against the area total',
+      at('Transit').locations === 3 && at('Transit').totalLocations === 86,
+      `${at('Transit').locations} / ${at('Transit').totalLocations}`)
+check('the area accuracy is right',
+      Math.abs(accuracy({ clean_match: at('Transit').clean_match,
+                          scanned: at('Transit').scanned }) - 90) < 0.001, '90%')
+
+check('nothing at all produces no rows', groupByArea([], []).length === 0, '0')
+check('every group in the report is defined',
+      AREA_GROUPS.map((g) => g.label).join(',') === 'HR,Transit,XINHAI,DLOC,OF,OW SAIC',
+      AREA_GROUPS.map((g) => g.label).join(','))
+check('exactly one group is the catch-all',
+      AREA_GROUPS.filter((g) => g.catchAll).length === 1, 'one')
 
 console.log('\n--- the five buckets are all named ---')
 check('every bucket has a label and tone',

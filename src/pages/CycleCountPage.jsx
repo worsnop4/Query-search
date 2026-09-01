@@ -11,6 +11,7 @@ import {
   reportRows,
   suggestedAction,
   totalsByDay,
+  groupByArea,
 } from '../lib/cycleCount'
 import {
   searchLocations,
@@ -28,6 +29,10 @@ import {
   dailyStats,
   adminStats,
   allCountRows,
+  areaStats,
+  planEntries,
+  addPlanEntry,
+  removePlanEntry,
 } from '../lib/cycleCountData'
 import {
   buildResultCsv,
@@ -776,9 +781,218 @@ function Pct({ row }) {
   return <span className={`pill ${tone}`}>{p.toFixed(0)}%</span>
 }
 
-function Dashboard({ onError, onStart }) {
+// ---------------------------------------------------------------------------
+// The monthly plan.
+//
+// "Develop a cycle count plan on a monthly basis" - their own report's
+// instruction. Any admin may edit it; in practice one person keeps it.
+//
+// Whether a planned count HAPPENED is derived from the counts themselves, not
+// ticked by hand, so the plan can never claim work that was not done.
+// ---------------------------------------------------------------------------
+
+function monthRange(month) {
+  const [y, m] = month.split('-').map(Number)
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate()
+  return [`${month}-01`, `${month}-${String(last).padStart(2, '0')}`]
+}
+
+function thisMonth() {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+function PlanPage({ onError, onBack }) {
+  const [month, setMonth] = useState(thisMonth)
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [term, setTerm] = useState('')
+  const [matches, setMatches] = useState([])
+  const [busy, setBusy] = useState(false)
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const [from, to] = monthRange(month)
+      setRows(await planEntries(from, to))
+    } catch (err) {
+      onError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [month, onError])
+
+  useEffect(() => { load() }, [load])
+
+  useEffect(() => {
+    if (!term.trim()) { setMatches([]); return }
+    let active = true
+    const t = setTimeout(() => {
+      searchLocations(term, 8)
+        .then((r) => active && setMatches(r))
+        .catch(() => {})
+    }, 200)
+    return () => { active = false; clearTimeout(t) }
+  }, [term])
+
+  async function add(location) {
+    setBusy(true)
+    onError(null)
+    try {
+      await addPlanEntry(date, location)
+      setTerm('')
+      setMatches([])
+      await load()
+    } catch (err) {
+      onError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(id) {
+    setBusy(true)
+    try {
+      await removePlanEntry(id)
+      await load()
+    } catch (err) {
+      onError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const done = rows.filter((r) => r.done).length
+
+  return (
+    <>
+      <div className="card">
+        <div className="cchead">
+          <div>
+            <h2>Cycle count plan</h2>
+            <p className="muted small">
+              Plan which location is counted on which day. Whether it happened
+              is taken from the counts themselves, never ticked by hand.
+            </p>
+          </div>
+          <button type="button" className="ghost" onClick={onBack}>
+            Back
+          </button>
+        </div>
+
+        <div className="ccplanadd">
+          <label>
+            <span className="muted small">Month</span>
+            <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} />
+          </label>
+          <label>
+            <span className="muted small">Plan date</span>
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </label>
+          <label className="grow">
+            <span className="muted small">Add a location</span>
+            <input
+              type="text"
+              value={term}
+              onChange={(e) => setTerm(e.target.value)}
+              placeholder="Search - LHS-PP01-401"
+              spellCheck={false}
+              autoComplete="off"
+              autoCapitalize="characters"
+            />
+          </label>
+        </div>
+
+        {matches.length > 0 && (
+          <ul className="loclist">
+            {matches.map((m) => (
+              <li key={m.location}>
+                <button
+                  type="button"
+                  className="locbtn"
+                  onClick={() => add(m.location)}
+                  disabled={busy}
+                >
+                  <span className="mono">{m.location}</span>
+                  <span className="muted small">
+                    {nf.format(m.cases)} case{m.cases === 1 ? '' : 's'} &middot; add to {date}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="card">
+        <h3>
+          {loading
+            ? 'Loading...'
+            : `${nf.format(rows.length)} planned, ${nf.format(done)} done`}
+        </h3>
+
+        {!loading && rows.length === 0 && (
+          <p className="muted small">Nothing planned for this month yet.</p>
+        )}
+
+        {rows.length > 0 && (
+          <div className="tablewrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Location</th>
+                  <th>Area</th>
+                  <th>Done</th>
+                  <th>Last counted</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.id} className={r.done ? 'ccdone' : undefined}>
+                    <td className="mono small">{r.plan_date}</td>
+                    <td className="mono">{r.location}</td>
+                    <td className="small">{r.area || '—'}</td>
+                    <td>
+                      {r.done ? (
+                        <span className="pill ok">Done</span>
+                      ) : (
+                        <span className="pill muted">Not yet</span>
+                      )}
+                    </td>
+                    <td className="small">
+                      {r.last_counted_at
+                        ? `${when(r.last_counted_at)} · ${r.last_counted_by}`
+                        : '—'}
+                    </td>
+                    <td className="num">
+                      <button
+                        type="button"
+                        className="ghost small"
+                        onClick={() => remove(r.id)}
+                        disabled={busy}
+                        aria-label={`Remove ${r.location}`}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </>
+  )
+}
+
+function Dashboard({ onError, onStart, onPlan }) {
   const [days, setDays] = useState([])
   const [admins, setAdmins] = useState([])
+  const [areas, setAreas] = useState([])
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(0)
 
@@ -802,11 +1016,12 @@ function Dashboard({ onError, onStart }) {
 
   useEffect(() => {
     let active = true
-    Promise.all([dailyStats(), adminStats()])
-      .then(([d, a]) => {
+    Promise.all([dailyStats(), adminStats(), areaStats()])
+      .then(([d, a, ar]) => {
         if (!active) return
         setDays(d)
         setAdmins(a)
+        setAreas(groupByArea(ar.counted, ar.sizes))
         setLoading(false)
       })
       .catch((err) => {
@@ -833,6 +1048,9 @@ function Dashboard({ onError, onStart }) {
         <div className="ccactions">
           <button type="button" onClick={onStart}>
             Start a cycle count
+          </button>
+          <button type="button" className="ghost" onClick={onPlan}>
+            Plan
           </button>
         </div>
       </div>
@@ -873,6 +1091,9 @@ function Dashboard({ onError, onStart }) {
         <button type="button" onClick={onStart}>
           Start a cycle count
         </button>
+        <button type="button" className="ghost" onClick={onPlan}>
+          Plan
+        </button>
         <button
           type="button"
           className="ghost"
@@ -885,6 +1106,50 @@ function Dashboard({ onError, onStart }) {
             : 'Download all counts (CSV)'}
         </button>
       </div>
+
+      {areas.length > 0 && (
+        <>
+          <h3>By area</h3>
+          <div className="tablewrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Area</th>
+                  <th className="num">Counts</th>
+                  <th className="num">Locations</th>
+                  <th className="num">Cases</th>
+                  <th className="num">True</th>
+                  <th className="num">Accuracy</th>
+                  <th className="num">Need check</th>
+                </tr>
+              </thead>
+              <tbody>
+                {areas.map((a) => (
+                  <tr key={a.label} className={a.scanned === 0 ? 'ccquiet' : undefined}>
+                    <td>
+                      <strong>{a.label}</strong>
+                    </td>
+                    <td className="num">{nf.format(a.sessions)}</td>
+                    {/* How much of the area has been touched. A bare "42
+                        locations" says nothing until you know the area has
+                        1,562 of them. */}
+                    <td className="num">
+                      {nf.format(a.locations)}
+                      <span className="muted small"> / {nf.format(a.totalLocations)}</span>
+                    </td>
+                    <td className="num">{nf.format(a.scanned)}</td>
+                    <td className="num">{nf.format(a.clean_match)}</td>
+                    <td className="num">
+                      {a.scanned === 0 ? <span className="muted">—</span> : <Pct row={a} />}
+                    </td>
+                    <td className="num">{nf.format(a.not_checked)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
 
       <DayChart days={days} />
 
@@ -1040,9 +1305,9 @@ export default function CycleCountPage() {
   const [doneId, setDoneId] = useState(null)
   const [error, setError] = useState(null)
   const [checking, setChecking] = useState(true)
-  // The dashboard is the landing screen; the location list only appears once
-  // someone actually wants to count something.
-  const [picking, setPicking] = useState(false)
+  // The dashboard is the landing screen; null means show it. 'pick' opens the
+  // location list, 'plan' the monthly plan.
+  const [picking, setPicking] = useState(null)
 
   const fail = useCallback((msg) => setError(msg), [])
 
@@ -1067,7 +1332,7 @@ export default function CycleCountPage() {
     setSession(null)
     setDoneId(null)
     setError(null)
-    setPicking(false)
+    setPicking(null)
   }
 
   return (
@@ -1089,15 +1354,21 @@ export default function CycleCountPage() {
         />
       ) : (
         <>
-          {picking ? (
+          {picking === 'pick' ? (
             <LocationPicker
               onStarted={setSession}
               onError={fail}
-              onBack={() => setPicking(false)}
+              onBack={() => setPicking(null)}
             />
+          ) : picking === 'plan' ? (
+            <PlanPage onError={fail} onBack={() => setPicking(null)} />
           ) : (
             <>
-              <Dashboard onError={fail} onStart={() => setPicking(true)} />
+              <Dashboard
+                onError={fail}
+                onStart={() => setPicking('pick')}
+                onPlan={() => setPicking('plan')}
+              />
               <RecentSessions />
             </>
           )}

@@ -195,6 +195,83 @@ export function reportRows(scans, notChecked) {
 }
 
 /**
+ * How the warehouse groups its areas, straight out of REPORT ACCURACY.xlsx.
+ *
+ * `calc_area()` in setup.sql already produces these buckets - it was written
+ * for the Breakdown and happens to be exactly the classification their report
+ * uses. Verified: every location in their HR, TRANSIT, XINHAI and spot-check
+ * sheets lands in the group their own report puts it in.
+ *
+ * XINHAI is XIN1 and XIN2 together, which is how their report names it. XIN1
+ * has had zero rows in every export seen so far but is mapped anyway.
+ *
+ * `catchAll` takes every remaining OW area - Yanfeng, Lingyun, Baosteel and
+ * the rest - so a new supplier area appears under OW SAIC on its own rather
+ * than vanishing from the dashboard.
+ */
+export const AREA_GROUPS = [
+  { label: 'HR', areas: ['HR'] },
+  { label: 'Transit', areas: ['Transit'] },
+  { label: 'XINHAI', areas: ['XIN1', 'XIN2'] },
+  { label: 'DLOC', areas: ['DLOC'] },
+  { label: 'OF', areas: ['OF'] },
+  { label: 'OW SAIC', areas: [], catchAll: true },
+]
+
+const NAMED_AREAS = new Set(AREA_GROUPS.flatMap((g) => g.areas))
+
+/**
+ * Fold the per-area rows into the report's groups, and pair each with how big
+ * that area actually is.
+ *
+ * `sizes` comes from the `area_sizes` view. Showing the size matters: "42
+ * locations counted" means nothing until you know whether the area has 50 or
+ * 4,400 of them, and an area with nothing counted has to stay visible or the
+ * plan has no gap to point at.
+ */
+export function groupByArea(counted = [], sizes = []) {
+  const blank = () => ({
+    sessions: 0, locations: 0, scanned: 0, clean_match: 0,
+    opened_mismatch: 0, wrong_location: 0, not_in_query: 0, not_checked: 0,
+    totalLocations: 0, totalCases: 0,
+  })
+
+  const out = new Map(AREA_GROUPS.map((g) => [g.label, { label: g.label, ...blank() }]))
+  const labelOf = (area) => {
+    const named = AREA_GROUPS.find((g) => g.areas.includes(area))
+    if (named) return named.label
+    if (!area || area === 'Unknown') return null
+    return AREA_GROUPS.find((g) => g.catchAll)?.label ?? null
+  }
+
+  for (const r of counted) {
+    const label = labelOf(r.area)
+    if (!label) continue
+    const t = out.get(label)
+    for (const k of ['sessions', 'locations', 'scanned', 'clean_match',
+                     'opened_mismatch', 'wrong_location', 'not_in_query', 'not_checked']) {
+      t[k] += Number(r[k]) || 0
+    }
+  }
+
+  for (const r of sizes) {
+    const label = labelOf(r.area)
+    if (!label) continue
+    const t = out.get(label)
+    t.totalLocations += Number(r.locations) || 0
+    t.totalCases += Number(r.cases) || 0
+  }
+
+  // Order is the report's, not by size: people read it in a fixed order.
+  return [...out.values()].filter((t) => t.totalCases > 0 || t.scanned > 0)
+}
+
+/** Which areas the app knows by name, for anything that needs the list. */
+export function isNamedArea(area) {
+  return NAMED_AREAS.has(area)
+}
+
+/**
  * Collapse the per-admin daily rows into one row per day.
  *
  * `cycle_count_daily` is grouped by day AND admin so the table can show who
