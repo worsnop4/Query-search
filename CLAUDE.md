@@ -25,7 +25,7 @@ real data and is not obvious from the code.
 | Partial search by last 4 digits | **Working, verified** — `06_partial_search.sql` is applied |
 | Search by case number | **Working** — `07_case_search.sql` is applied; 183ms vs a 456ms un-indexed control |
 | Vercel deploy | Live, auto-deploys from `main` |
-| Cycle count | **Working** — needs `08` → `09` → `10` → `11` → `12`. Dashboard-first landing, scan, 5 buckets, location lock, one decision per count, per-count and all-counts CSV |
+| Cycle count | **Working** — needs `08` → … → `15`. Dashboard-first, scan with undo, 5 buckets, location lock, per-area totals, monthly plan, CSV exports and the WMS put-away `.xls` |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Not started** — has open questions, see below |
 
@@ -426,6 +426,41 @@ This is **not** the same as the known `inbound_time` bug below, which is about
 imported *text* timestamps being read as UTC. That one is still open and does
 not touch the cycle count, whose timestamps come from `now()`.
 
+**The WMS put-away file is a real `.xls`, not a CSV.** `D:\Daily\Cycle
+Count\Put away template.xls` is what the WMS eats, and `putaway.js` reproduces
+it exactly: sheet named `Sheet3`, `A1 = "Case List"`, headers on row 2
+(`Old Case No | Location Code | New Case No | Part No | Quantity`), data from
+row 3. Only columns A and B are filled — the user's instruction was *"you just
+need to put case to row a and actual location at row b"* — and `Location Code`
+is the **actual** location, because a put away moves the case to where it
+really is.
+
+**Only `wrong_location` cases go in it.** A case Query has as opened needs a
+shortage *and* a profit; a case Query does not know needs a profit. Putting
+those in a put-away file would tell the WMS to do the wrong thing.
+
+Written with SheetJS `bookType: 'biff8'`, which is Excel 97-2003 — the
+template's own `FileFormat 56`. Two traps: `XLSX.write(..., {type:'array'})`
+returns a raw **ArrayBuffer**, not a typed array, so it is wrapped in a
+`Uint8Array`; and SheetJS is **dynamically imported** so the ~490 kB does not
+land on a warehouse phone until someone actually clicks the button. Verified by
+opening the generated file in Excel via COM and comparing every header cell
+against the real template — `scripts/test-putaway.mjs` also checks the OLE2
+signature, since a wrong container is rejected by the WMS however right the
+columns are.
+
+**A finished count can be reopened** from Recent counts. Counting happens on a
+phone; the reason, the action and the WMS file are done afterwards at a laptop,
+possibly by a different admin — so `set_session_followup()` deliberately has no
+ownership check.
+
+**A mis-scan can be removed, but only while the count is open** (`15`). A hand
+scanner picks up whatever label is in front of it. Once the count is finished
+the door closes: a finished count is the record, and letting scans be deleted
+from it would mean the accuracy figure could be edited after the fact with
+nothing to show for it. The fix for a mistake found later is to count the
+location again, which leaves both counts visible.
+
 **Accuracy has exactly one definition**, `accuracy()` in `cycleCount.js`. The
 SQL views deliberately return raw counts and no percentage, so the formula
 cannot drift between the screen, the CSV and the database.
@@ -672,6 +707,7 @@ node scripts/test-parser.mjs             # parser vs the real files, all layouts
 node scripts/test-multifile.mjs          # 39 raw files parsed as one upload
 node scripts/test-cycle-count.mjs        # buckets, accuracy, the worklist
 node scripts/test-cycle-count-export.mjs # both cycle count CSVs
+node scripts/test-putaway.mjs            # the WMS .xls, layout and container
 node --env-file=.env scripts/smoke-test.mjs   # search queries vs live Supabase
 npm run build
 ```
@@ -726,12 +762,10 @@ new file shape appears.
    `12_cycle_count_export.sql`.** `08` → `09` → `10` are applied; `11` moves
    the follow-up onto the session and adds the statistics views, `12` adds the
    flat all-counts export view.
-4. **The WMS adjustment file, if a specific format is needed.** The result CSV
-   is deliberately shaped like their Compare sheet so an adjustment document
-   can be built from it by hand today. The user said they would show a sample
-   of the real WMS file — *"we need adjustment delete form query (called
-   shortage) and input again with full case (porfit)"* — so a direct generator
-   may still be wanted. Nothing is blocked on it.
+4. **The shortage / profit WMS files.** The **put away** file is done (`.xls`,
+   see below). The other two actions the user named — *"delete form query
+   (called shortage) and input again with full case (porfit)"* — have no
+   template yet. Ask for those two blank templates when they are wanted.
 
 ### Open questions, blocking the Breakdown feature
 

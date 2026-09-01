@@ -71,6 +71,19 @@ export async function recordScan(sessionId, caseNo) {
   return row
 }
 
+/**
+ * Undo a mis-scan. Only works while the count is open and only on your own -
+ * a finished count is a record, not a draft.
+ */
+export async function removeScan(sessionId, caseNo) {
+  const { data, error } = await supabase.rpc('remove_scan', {
+    p_session_id: sessionId,
+    p_case_no: caseNo,
+  })
+  if (error) throw new Error(error.message)
+  return data === true
+}
+
 export async function finishSession(sessionId) {
   const { data, error } = await supabase.rpc('finish_cycle_count', {
     p_session_id: sessionId,

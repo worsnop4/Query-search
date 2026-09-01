@@ -18,6 +18,7 @@ import {
   currentLocks,
   startSession,
   recordScan,
+  removeScan,
   finishSession,
   cancelSession,
   saveFollowup,
@@ -42,8 +43,15 @@ import {
   dailyFileName,
   buildAllCsv,
   allFileName,
+  localDate,
 } from '../lib/cycleCountExport'
-import { saveCsv } from '../lib/download'
+import { saveCsv, saveBlob } from '../lib/download'
+import {
+  putawaySheet,
+  putawayRows,
+  putawayFileName,
+  writePutawayXls,
+} from '../lib/putaway'
 
 const nf = new Intl.NumberFormat()
 
@@ -228,6 +236,19 @@ function ScanScreen({ session, onFinished, onError }) {
     }
   }, [session.id, onError])
 
+  // A wedge scanner picks up whatever label is in front of it. Undoing one bad
+  // scan has to be possible without cancelling the whole count.
+  async function undo(caseNo) {
+    onError(null)
+    try {
+      await removeScan(session.id, caseNo)
+      setScans((prev) => prev.filter((s) => s.case_no !== caseNo))
+      setLast((l) => (l && l.case_no === caseNo ? null : l))
+    } catch (err) {
+      onError(err.message)
+    }
+  }
+
   function submit(e) {
     e?.preventDefault()
     const read = readScan(value)
@@ -326,18 +347,30 @@ function ScanScreen({ session, onFinished, onError }) {
                   <th>Case No</th>
                   <th>Result</th>
                   <th>Query says</th>
+                  <th />
                 </tr>
               </thead>
               <tbody>
                 {scans.map((s) => (
                   <tr key={s.case_no}>
-                    <td className="mono">{s.case_no}</td>
+                    <td className="mono ccbreak">{s.case_no}</td>
                     <td>
                       <span className={`pill ${RESULTS[bucketOf(s)].tone}`}>
                         {RESULTS[bucketOf(s)].label}
                       </span>
                     </td>
                     <td className="small">{describeScan(s)}</td>
+                    <td className="num">
+                      <button
+                        type="button"
+                        className="ghost small"
+                        onClick={() => undo(s.case_no)}
+                        aria-label={`Remove the scan of ${s.case_no}`}
+                        title="Scanned by mistake? Remove it."
+                      >
+                        Remove
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -452,13 +485,14 @@ function SessionFollowup({ summary, counts, onError }) {
   )
 }
 
-function DoneScreen({ sessionId, onNew, onError }) {
+function DoneScreen({ sessionId, onNew, onCountAnother, onError }) {
   const [summary, setSummary] = useState(null)
   const [rows, setRows] = useState([])
   // Kept as they came back so the CSV can hold every case, not just the
   // problems the screen lists.
   const [raw, setRaw] = useState({ scans: [], notChecked: [] })
   const [loading, setLoading] = useState(true)
+  const [writing, setWriting] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -484,8 +518,29 @@ function DoneScreen({ sessionId, onNew, onError }) {
     }
   }, [sessionId, onError])
 
+  // SheetJS is ~400 kB and is fetched only when this is clicked - see
+  // writePutawayXls. Until then the cycle count page stays small enough for a
+  // phone in the warehouse.
+  async function downloadPutaway() {
+    setWriting(true)
+    onError(null)
+    try {
+      const bytes = await writePutawayXls(putawaySheet(summary, raw.scans))
+      saveBlob(
+        new Blob([bytes], { type: 'application/vnd.ms-excel' }),
+        putawayFileName(summary, localDate(summary.started_at))
+      )
+    } catch (err) {
+      onError(err.message)
+    } finally {
+      setWriting(false)
+    }
+  }
+
   if (loading) return <p className="muted">Working out the result...</p>
   if (!summary) return null
+
+  const putawayCount = putawayRows(summary, raw.scans).length
 
   const counts = {
     clean_match: Number(summary.clean_match),
@@ -529,11 +584,13 @@ function DoneScreen({ sessionId, onNew, onError }) {
         <Counters counts={counts} expected={Number(summary.expected_count)} />
 
         <div className="ccactions">
-          <button type="button" onClick={onNew}>
+          <button type="button" onClick={onCountAnother}>
             Count another location
           </button>
-          {/* Every case, not just the problems on screen - the adjustment
-              document is built from this. */}
+          <button type="button" className="ghost" onClick={onNew}>
+            Back to dashboard
+          </button>
+          {/* Every case, not just the problems on screen. */}
           <button
             type="button"
             className="ghost"
@@ -546,6 +603,21 @@ function DoneScreen({ sessionId, onNew, onError }) {
           >
             Download result (CSV)
           </button>
+          {/* The file the WMS actually eats. Only the wrong-location cases go
+              in it - the other findings need a different WMS action. */}
+          {putawayCount > 0 && (
+            <button
+              type="button"
+              className="ghost"
+              onClick={downloadPutaway}
+              disabled={writing}
+              title="Excel file in your Put away template, ready to upload to the WMS"
+            >
+              {writing
+                ? 'Building...'
+                : `Put away file (${nf.format(putawayCount)})`}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1255,7 +1327,7 @@ function Dashboard({ onError, onStart, onPlan }) {
   )
 }
 
-function RecentSessions() {
+function RecentSessions({ onOpen }) {
   const [rows, setRows] = useState([])
 
   useEffect(() => {
@@ -1273,6 +1345,12 @@ function RecentSessions() {
   return (
     <div className="card">
       <h3>Recent counts</h3>
+      {/* Counting happens on a phone; the reason, the action and the WMS file
+          are done afterwards at a laptop. So a finished count has to be
+          re-openable, by whoever is at the desk. */}
+      <p className="muted small">
+        Open a count to set its reason and action, or to download the files.
+      </p>
       <div className="tablewrap">
         <table>
           <thead>
@@ -1284,6 +1362,7 @@ function RecentSessions() {
               <th className="num">Scanned</th>
               <th className="num">Accuracy</th>
               <th className="num">Need check</th>
+              <th />
             </tr>
           </thead>
           <tbody>
@@ -1301,6 +1380,15 @@ function RecentSessions() {
                   <td className="num">{nf.format(s.scanned)}</td>
                   <td className="num">{pct === null ? '—' : `${pct.toFixed(0)}%`}</td>
                   <td className="num">{nf.format(s.not_checked)}</td>
+                  <td className="num">
+                    <button
+                      type="button"
+                      className="ghost small"
+                      onClick={() => onOpen(s.id)}
+                    >
+                      {s.action || s.reason ? 'Open' : 'Set action'}
+                    </button>
+                  </td>
                 </tr>
               )
             })}
@@ -1353,7 +1441,15 @@ export default function CycleCountPage() {
       {checking ? (
         <p className="muted">Checking for an unfinished count...</p>
       ) : doneId ? (
-        <DoneScreen sessionId={doneId} onNew={reset} onError={fail} />
+        <DoneScreen
+          sessionId={doneId}
+          onNew={reset}
+          onCountAnother={() => {
+            setDoneId(null)
+            setPicking('pick')
+          }}
+          onError={fail}
+        />
       ) : session ? (
         <ScanScreen
           session={session}
@@ -1380,7 +1476,7 @@ export default function CycleCountPage() {
                 onStart={() => setPicking('pick')}
                 onPlan={() => setPicking('plan')}
               />
-              <RecentSessions />
+              <RecentSessions onOpen={setDoneId} />
             </>
           )}
         </>
