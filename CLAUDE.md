@@ -25,7 +25,7 @@ real data and is not obvious from the code.
 | Partial search by last 4 digits | **Working, verified** — `06_partial_search.sql` is applied |
 | Search by case number | **Working** — `07_case_search.sql` is applied; 183ms vs a 456ms un-indexed control |
 | Vercel deploy | Live, auto-deploys from `main` |
-| Cycle count | **Working** — needs `08` → `09` → `10` → `11`. Scan, 5 buckets, location lock, one decision per count, CSV export and the dashboard are done |
+| Cycle count | **Working** — needs `08` → `09` → `10` → `11` → `12`. Dashboard-first landing, scan, 5 buckets, location lock, one decision per count, per-count and all-counts CSV |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Not started** — has open questions, see below |
 
@@ -430,6 +430,21 @@ not touch the cycle count, whose timestamps come from `now()`.
 SQL views deliberately return raw counts and no percentage, so the formula
 cannot drift between the screen, the CSV and the database.
 
+**The dashboard is the landing screen**, not the location picker — the user
+asked for it directly. "Start a cycle count" reveals the picker; **Back**
+returns. There are two downloads: one count from its result screen, and every
+case from every count by every admin from the dashboard.
+
+The all-counts export reads `cycle_count_rows` (`12`), a view that UNIONs the
+scans with the expected-but-never-scanned rows. The "need check" half is
+defined by *absence* from `cycle_count_scan`, so Postgres does the anti-join —
+doing it in the browser would mean pulling `cycle_count_expected` whole, and
+one count of `TRANSIT` alone freezes 3,252 rows into it. Paged on
+`(session_id, case_no)`, which is unique across the union: scans by
+constraint, expected by primary key, and the `WHERE` guarantees no case is in
+both halves. An unstable sort here would repeat one row and drop another, the
+same trap the inventory export has.
+
 `src/lib/cycleCount.js` is the pure half (reading a scan, the buckets,
 accuracy, the report ordering) and is covered by `scripts/test-cycle-count.mjs`
 with no database. `cycleCountExport.js` builds both CSVs and is covered by
@@ -622,9 +637,10 @@ new file shape appears.
 2. **Re-check the Vercel site** — several commits have deployed since the user
    last looked at it.
 
-3. **Run `supabase/11_cycle_count_session_followup.sql`.** `08` → `09` → `10`
-   are applied; `11` moves the follow-up onto the session and adds the
-   statistics views.
+3. **Run `supabase/11_cycle_count_session_followup.sql` then
+   `12_cycle_count_export.sql`.** `08` → `09` → `10` are applied; `11` moves
+   the follow-up onto the session and adds the statistics views, `12` adds the
+   flat all-counts export view.
 4. **The WMS adjustment file, if a specific format is needed.** The result CSV
    is deliberately shaped like their Compare sheet so an adjustment document
    can be built from it by hand today. The user said they would show a sample

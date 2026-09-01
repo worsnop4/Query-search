@@ -65,44 +65,84 @@ export function localDate(ts, timeZone = 'Asia/Jakarta') {
  * repeating it keeps each row self-contained once the file is sorted or
  * filtered in Excel.
  */
+/**
+ * One CSV row. `session` carries the count it belongs to - which for the
+ * all-counts export varies from row to row, so both exports share this and
+ * cannot drift apart.
+ */
+function exportRow(no, session, case_no, bucket, where) {
+  return {
+    No: no,
+    Date: localDate(session.started_at),
+    Checker: session.started_by ?? '',
+    'Case Number': case_no,
+    'Actual Location': session.location,
+    'Part number': '',
+    Qty: '',
+    // A case can sit in more than one location - 381 of 108,778 full cases
+    // do - so this is a list, joined rather than silently truncated.
+    'Query Location': (where ?? []).join(' | '),
+    Status: statusOf(bucket),
+    Finding: RESULTS[bucket]?.label ?? bucket,
+    Reason: session.reason ?? '',
+    Action: session.action ? (ACTION_LABEL[session.action] ?? session.action) : '',
+    Done: session.done ? 'done' : '',
+    Remark: session.remark ?? '',
+  }
+}
+
 export function resultRows(session, scans, notChecked = []) {
-  const date = localDate(session.started_at)
-  const checker = session.started_by ?? ''
-  const reason = session.reason ?? ''
-  const action = session.action ? (ACTION_LABEL[session.action] ?? session.action) : ''
-  const done = session.done ? 'done' : ''
-  const remark = session.remark ?? ''
-
   const rows = []
-  const push = (case_no, bucket, where) =>
-    rows.push({
-      No: rows.length + 1,
-      Date: date,
-      Checker: checker,
-      'Case Number': case_no,
-      'Actual Location': session.location,
-      'Part number': '',
-      Qty: '',
-      // A case can sit in more than one location - 381 of 108,778 full cases
-      // do - so this is a list, joined rather than silently truncated.
-      'Query Location': (where ?? []).join(' | '),
-      Status: statusOf(bucket),
-      Finding: RESULTS[bucket]?.label ?? bucket,
-      Reason: reason,
-      Action: action,
-      Done: done,
-      Remark: remark,
-    })
-
-  for (const s of scans) push(s.case_no, bucketOf(s), s.system_locations)
+  for (const s of scans) {
+    rows.push(exportRow(rows.length + 1, session, s.case_no, bucketOf(s), s.system_locations))
+  }
   // Never scanned, so Query's location for them is this location by definition.
-  for (const case_no of notChecked) push(case_no, 'not_checked', [session.location])
-
+  for (const case_no of notChecked) {
+    rows.push(exportRow(rows.length + 1, session, case_no, 'not_checked', [session.location]))
+  }
   return rows
 }
 
 export function buildResultCsv(session, scans, notChecked = []) {
   return toCsv(resultRows(session, scans, notChecked), RESULT_COLUMNS)
+}
+
+// ---------------------------------------------------------------------------
+// Every case, every count, every admin
+// ---------------------------------------------------------------------------
+
+/**
+ * Rows straight from the `cycle_count_rows` view, which already carries the
+ * session on each row and has resolved "never scanned" into result
+ * 'not_checked'.
+ *
+ * Newest count first, then by case number - the export is read as a record of
+ * what happened, and the most recent day is what anyone opens it for.
+ */
+export function allRows(viewRows) {
+  const sorted = [...viewRows].sort(
+    (a, b) =>
+      new Date(b.started_at) - new Date(a.started_at) ||
+      String(a.location).localeCompare(String(b.location)) ||
+      String(a.case_no).localeCompare(String(b.case_no))
+  )
+  return sorted.map((r, i) =>
+    exportRow(
+      i + 1,
+      r,
+      r.case_no,
+      r.result === 'not_checked' ? 'not_checked' : bucketOf(r),
+      r.system_locations
+    )
+  )
+}
+
+export function buildAllCsv(viewRows) {
+  return toCsv(allRows(viewRows), RESULT_COLUMNS)
+}
+
+export function allFileName(now = new Date()) {
+  return `cycle-count-all-${localDate(now)}.csv`
 }
 
 /** Safe for a Windows filename: locations contain spaces, slashes and dots. */

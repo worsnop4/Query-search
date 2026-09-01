@@ -16,6 +16,9 @@ import {
   dailyRows,
   buildDailyCsv,
   dailyFileName,
+  allRows,
+  buildAllCsv,
+  allFileName,
 } from '../src/lib/cycleCountExport.js'
 import { accuracy } from '../src/lib/cycleCount.js'
 import { checker } from './lib.mjs'
@@ -131,6 +134,78 @@ const awkward = resultFileName({
 console.log(`   ${awkward}`)
 check('an awkward location is made safe', /^[A-Za-z0-9.\-]+$/.test(awkward), awkward)
 check('and still ends in .csv', awkward.endsWith('.csv'), awkward)
+
+console.log('\n--- every count, every admin ---')
+
+// Straight from the cycle_count_rows view: each row carries its own session,
+// and "never scanned" has already been resolved to result = 'not_checked'.
+const viewRows = [
+  { session_id: 's1', location: 'TRANSIT B02', started_at: '2026-08-30T02:00:00Z',
+    started_by: 'doni', reason: 'Wrong put away', action: 'put_away', done: true,
+    remark: null, case_no: 'OLD-1', result: 'wrong_location', query_opened: false,
+    system_locations: ['REC-TRANSIT-01'] },
+  { session_id: 's2', location: 'STORAGE-A001', started_at: '2026-08-31T02:00:00Z',
+    started_by: 'dion', reason: null, action: null, done: false, remark: null,
+    case_no: 'NEW-1', result: 'match', query_opened: false,
+    system_locations: ['STORAGE-A001'] },
+  { session_id: 's2', location: 'STORAGE-A001', started_at: '2026-08-31T02:00:00Z',
+    started_by: 'dion', reason: null, action: null, done: false, remark: null,
+    case_no: 'NEW-2', result: 'not_checked', query_opened: false,
+    system_locations: ['STORAGE-A001'] },
+  { session_id: 's2', location: 'STORAGE-A001', started_at: '2026-08-31T02:00:00Z',
+    started_by: 'dion', reason: null, action: null, done: false, remark: null,
+    case_no: 'NEW-3', result: 'match', query_opened: true,
+    system_locations: ['STORAGE-A001'] },
+]
+
+const arows = allRows(viewRows)
+
+check('every row is kept', arows.length === 4, String(arows.length))
+// The two things the user asked for by name.
+check('need-check cases are included',
+      arows.some((r) => r.Status === 'Need check'),
+      arows.map((r) => r.Status).join(','))
+check('more than one admin appears',
+      new Set(arows.map((r) => r.Checker)).size === 2,
+      [...new Set(arows.map((r) => r.Checker))].join(','))
+
+check('newest count first', arows[0].Date === '2026-08-31', arows[0].Date)
+check('the older count is last', arows.at(-1).Date === '2026-08-30', arows.at(-1).Date)
+check('numbering is continuous across counts',
+      arows.map((r) => r.No).join(',') === '1,2,3,4', arows.map((r) => r.No).join(','))
+
+// Each row must carry ITS OWN count's location and decision - the bug this
+// export could easily have: one session's action smeared across all of them.
+const older = arows.find((r) => r['Case Number'] === 'OLD-1')
+const newer = arows.find((r) => r['Case Number'] === 'NEW-1')
+check('each row keeps its own location',
+      older['Actual Location'] === 'TRANSIT B02' &&
+        newer['Actual Location'] === 'STORAGE-A001',
+      `${older['Actual Location']} / ${newer['Actual Location']}`)
+check('each row keeps its own checker',
+      older.Checker === 'doni' && newer.Checker === 'dion',
+      `${older.Checker} / ${newer.Checker}`)
+check('a decision does not leak between counts',
+      older.Action === 'Put away' && newer.Action === '',
+      `"${older.Action}" / "${newer.Action}"`)
+check('done does not leak either',
+      older.Done === 'done' && newer.Done === '', `"${older.Done}" / "${newer.Done}"`)
+
+// The finding that matters most must survive this path too.
+const opened = arows.find((r) => r['Case Number'] === 'NEW-3')
+check('a Query-says-opened case keeps its finding',
+      opened.Finding === 'Query says opened' && opened.Status === 'False',
+      `${opened.Status} / ${opened.Finding}`)
+
+const acsv = buildAllCsv(viewRows)
+check('the all-counts CSV uses the same columns as one count',
+      acsv.split('\n')[0] === RESULT_COLUMNS.join(','), 'same header')
+check('one line per case plus the header', acsv.trimEnd().split('\n').length === 5,
+      String(acsv.trimEnd().split('\n').length))
+check('it is named for today',
+      /^cycle-count-all-\d{4}-\d{2}-\d{2}\.csv$/.test(allFileName()), allFileName())
+check('an empty history produces just a header',
+      buildAllCsv([]).trim() === RESULT_COLUMNS.join(','), 'header only')
 
 console.log('\n--- the statistics CSV ---')
 

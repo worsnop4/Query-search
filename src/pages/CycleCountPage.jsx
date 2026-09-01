@@ -26,12 +26,15 @@ import {
   openSession,
   dailyStats,
   adminStats,
+  allCountRows,
 } from '../lib/cycleCountData'
 import {
   buildResultCsv,
   resultFileName,
   buildDailyCsv,
   dailyFileName,
+  buildAllCsv,
+  allFileName,
 } from '../lib/cycleCountExport'
 import { saveCsv } from '../lib/download'
 
@@ -48,7 +51,7 @@ function when(ts) {
 // Choosing what to count
 // ---------------------------------------------------------------------------
 
-function LocationPicker({ onStarted, onError }) {
+function LocationPicker({ onStarted, onError, onBack }) {
   const [term, setTerm] = useState('')
   const [locations, setLocations] = useState([])
   const [locks, setLocks] = useState([])
@@ -96,12 +99,19 @@ function LocationPicker({ onStarted, onError }) {
 
   return (
     <div className="card">
-      <h2>Start a cycle count</h2>
-      <p className="muted small">
-        One location at a time. Every case Query has there is included, opened
-        or not - a case found full while Query says it was opened is exactly
-        what this is for.
-      </p>
+      <div className="cchead">
+        <div>
+          <h2>Pick a location</h2>
+          <p className="muted small">
+            One location at a time. Every case Query has there is included,
+            opened or not - a case found full while Query says it was opened is
+            exactly what this is for.
+          </p>
+        </div>
+        <button type="button" className="ghost" onClick={onBack}>
+          Back
+        </button>
+      </div>
 
       <input
         type="text"
@@ -623,10 +633,29 @@ function Pct({ row }) {
   return <span className={`pill ${tone}`}>{p.toFixed(0)}%</span>
 }
 
-function Dashboard({ onError }) {
+function Dashboard({ onError, onStart }) {
   const [days, setDays] = useState([])
   const [admins, setAdmins] = useState([])
   const [loading, setLoading] = useState(true)
+  const [downloading, setDownloading] = useState(0)
+
+  // Every case from every count by every admin. Paged, so it can take a
+  // moment - the row count is shown rather than a spinner that says nothing.
+  async function downloadAll() {
+    setDownloading(1)
+    try {
+      const rows = await allCountRows((n) => setDownloading(n))
+      if (rows.length === 0) {
+        onError('There are no finished counts to export yet.')
+        return
+      }
+      saveCsv(buildAllCsv(rows), allFileName())
+    } catch (err) {
+      onError(err.message)
+    } finally {
+      setDownloading(0)
+    }
+  }
 
   useEffect(() => {
     let active = true
@@ -647,8 +676,25 @@ function Dashboard({ onError }) {
     }
   }, [onError])
 
-  if (loading) return null
-  if (days.length === 0 && admins.length === 0) return null
+  if (loading) return <p className="muted">Loading the dashboard...</p>
+
+  // Nothing counted yet: still offer the way in, or the page is a dead end.
+  if (days.length === 0 && admins.length === 0) {
+    return (
+      <div className="card">
+        <h2>Cycle count</h2>
+        <p className="muted small">
+          No counts yet. Pick a location and scan the cases on it; Query is
+          compared against what you find.
+        </p>
+        <div className="ccactions">
+          <button type="button" onClick={onStart}>
+            Start a cycle count
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   const total = admins.reduce(
     (t, a) => ({
@@ -665,7 +711,7 @@ function Dashboard({ onError }) {
     <div className="card">
       <div className="cchead">
         <div>
-          <h2>Dashboard</h2>
+          <h2>Cycle count</h2>
           <p className="muted small">Finished counts only.</p>
         </div>
         {overall !== null && (
@@ -678,6 +724,23 @@ function Dashboard({ onError }) {
             </span>
           </p>
         )}
+      </div>
+
+      <div className="ccactions">
+        <button type="button" onClick={onStart}>
+          Start a cycle count
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={downloadAll}
+          disabled={downloading > 0}
+          title="Every case from every count, including the ones that still need checking"
+        >
+          {downloading > 0
+            ? `Collecting ${nf.format(downloading)} rows...`
+            : 'Download all counts (CSV)'}
+        </button>
       </div>
 
       {admins.length > 0 && (
@@ -832,6 +895,9 @@ export default function CycleCountPage() {
   const [doneId, setDoneId] = useState(null)
   const [error, setError] = useState(null)
   const [checking, setChecking] = useState(true)
+  // The dashboard is the landing screen; the location list only appears once
+  // someone actually wants to count something.
+  const [picking, setPicking] = useState(false)
 
   const fail = useCallback((msg) => setError(msg), [])
 
@@ -856,6 +922,7 @@ export default function CycleCountPage() {
     setSession(null)
     setDoneId(null)
     setError(null)
+    setPicking(false)
   }
 
   return (
@@ -877,9 +944,18 @@ export default function CycleCountPage() {
         />
       ) : (
         <>
-          <LocationPicker onStarted={setSession} onError={fail} />
-          <Dashboard onError={fail} />
-          <RecentSessions />
+          {picking ? (
+            <LocationPicker
+              onStarted={setSession}
+              onError={fail}
+              onBack={() => setPicking(false)}
+            />
+          ) : (
+            <>
+              <Dashboard onError={fail} onStart={() => setPicking(true)} />
+              <RecentSessions />
+            </>
+          )}
         </>
       )}
     </div>

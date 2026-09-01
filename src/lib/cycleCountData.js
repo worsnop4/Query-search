@@ -117,6 +117,33 @@ export async function dailyStats(limit = 90) {
   return data ?? []
 }
 
+/**
+ * Every case from every finished count, by every admin - scanned and never
+ * scanned alike.
+ *
+ * Paged, and ordered by (session_id, case_no) because that pair is unique
+ * across the view. Without a stable sort Postgres may hand back the same row
+ * on two pages and drop another, producing a file that looks complete and is
+ * not - the same trap the inventory export has.
+ */
+export async function allCountRows(onProgress) {
+  const PAGE = 1000
+  const all = []
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('cycle_count_rows')
+      .select('*')
+      .order('session_id')
+      .order('case_no')
+      .range(from, from + PAGE - 1)
+    if (error) throw new Error(error.message)
+    const batch = data ?? []
+    all.push(...batch)
+    onProgress?.(all.length)
+    if (batch.length < PAGE) return all
+  }
+}
+
 /** Totals per admin, for the dashboard. */
 export async function adminStats() {
   const { data, error } = await supabase
