@@ -210,15 +210,10 @@ export async function removePlanEntry(id) {
   if (error) throw new Error(error.message)
 }
 
-/** Totals per admin, for the dashboard. */
-export async function adminStats() {
-  const { data, error } = await supabase
-    .from('cycle_count_by_admin')
-    .select('*')
-    .order('scanned', { ascending: false })
-  if (error) throw new Error(error.message)
-  return data ?? []
-}
+// Nothing reads cycle_count_by_admin any more - the user dropped the per-admin
+// and per-day tables from the dashboard, keeping the chart and the per-area
+// breakdown. The view is left in place in SQL; add a reader back here if that
+// table is ever wanted again.
 
 /** Case numbers Query expected here that were never scanned. */
 export async function notCheckedCases(sessionId) {

@@ -27,7 +27,6 @@ import {
   recentSessions,
   openSession,
   dailyStats,
-  adminStats,
   allCountRows,
   areaStats,
   planEntries,
@@ -1071,7 +1070,7 @@ function PlanPage({ onError, onBack }) {
 
 function Dashboard({ onError, onStart, onPlan }) {
   const [days, setDays] = useState([])
-  const [admins, setAdmins] = useState([])
+  const [counted, setCounted] = useState([])
   const [areas, setAreas] = useState([])
   const [loading, setLoading] = useState(true)
   const [downloading, setDownloading] = useState(0)
@@ -1096,11 +1095,15 @@ function Dashboard({ onError, onStart, onPlan }) {
 
   useEffect(() => {
     let active = true
-    Promise.all([dailyStats(), adminStats(), areaStats()])
-      .then(([d, a, ar]) => {
+    Promise.all([dailyStats(), areaStats()])
+      .then(([d, ar]) => {
         if (!active) return
         setDays(d)
-        setAdmins(a)
+        // The raw per-area rows as well as the grouped ones: groupByArea drops
+        // anything it cannot place - a count whose location has since left
+        // inventory comes back as area 'Unknown' - and the headline total must
+        // still include that work.
+        setCounted(ar.counted)
         setAreas(groupByArea(ar.counted, ar.sizes))
         setLoading(false)
       })
@@ -1117,7 +1120,7 @@ function Dashboard({ onError, onStart, onPlan }) {
   if (loading) return <p className="muted">Loading the dashboard...</p>
 
   // Nothing counted yet: still offer the way in, or the page is a dead end.
-  if (days.length === 0 && admins.length === 0) {
+  if (days.length === 0 && counted.length === 0) {
     return (
       <div className="card">
         <h2>Cycle count</h2>
@@ -1137,14 +1140,15 @@ function Dashboard({ onError, onStart, onPlan }) {
     )
   }
 
-  const total = admins.reduce(
+  // Summed from the RAW rows, not the grouped ones, so no work is left out of
+  // the headline figure.
+  const total = counted.reduce(
     (t, a) => ({
       clean_match: t.clean_match + Number(a.clean_match),
       scanned: t.scanned + Number(a.scanned),
       not_checked: t.not_checked + Number(a.not_checked),
-      locations: t.locations + Number(a.locations),
     }),
-    { clean_match: 0, scanned: 0, not_checked: 0, locations: 0 }
+    { clean_match: 0, scanned: 0, not_checked: 0 }
   )
   const overall = accuracy(total)
 
@@ -1185,6 +1189,18 @@ function Dashboard({ onError, onStart, onPlan }) {
             ? `Collecting ${nf.format(downloading)} rows...`
             : 'Download all counts (CSV)'}
         </button>
+        {/* The per-day, per-admin numbers are no longer shown as a table, but
+            they are still worth having as a file - it is the shape of their
+            own Recap sheet. */}
+        {days.length > 0 && (
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => saveCsv(buildDailyCsv(days, accuracy), dailyFileName())}
+          >
+            Download statistics (CSV)
+          </button>
+        )}
       </div>
 
       {/* The chart first: it is the whole picture at a glance, and the tables
@@ -1235,93 +1251,6 @@ function Dashboard({ onError, onStart, onPlan }) {
         </>
       )}
 
-      {admins.length > 0 && (
-        <>
-          <h3>By admin</h3>
-          <div className="tablewrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Admin</th>
-                  <th className="num">Counts</th>
-                  <th className="num">Locations</th>
-                  <th className="num">Cases</th>
-                  <th className="num">True</th>
-                  <th className="num">Accuracy</th>
-                  <th className="num">Need check</th>
-                </tr>
-              </thead>
-              <tbody>
-                {admins.map((a) => (
-                  <tr key={a.started_by_uid ?? a.started_by}>
-                    <td>{a.started_by}</td>
-                    <td className="num">{nf.format(a.sessions)}</td>
-                    <td className="num">{nf.format(a.locations)}</td>
-                    <td className="num">{nf.format(a.scanned)}</td>
-                    <td className="num">{nf.format(a.clean_match)}</td>
-                    <td className="num">
-                      <Pct row={a} />
-                    </td>
-                    <td className="num">{nf.format(a.not_checked)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-
-      {days.length > 0 && (
-        <>
-          <h3>By day</h3>
-          <div className="tablewrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Admin</th>
-                  <th className="num">Locations</th>
-                  <th className="num">Cases</th>
-                  <th className="num">True</th>
-                  <th className="num">Opened</th>
-                  <th className="num">Wrong loc</th>
-                  <th className="num">Not in Query</th>
-                  <th className="num">Accuracy</th>
-                  <th className="num">Need check</th>
-                </tr>
-              </thead>
-              <tbody>
-                {days.map((d) => (
-                  <tr key={`${d.count_date}-${d.started_by}`}>
-                    <td className="mono small">{d.count_date}</td>
-                    <td className="small">{d.started_by}</td>
-                    <td className="num">{nf.format(d.locations)}</td>
-                    <td className="num">{nf.format(d.scanned)}</td>
-                    <td className="num">{nf.format(d.clean_match)}</td>
-                    <td className="num">{nf.format(d.opened_mismatch)}</td>
-                    <td className="num">{nf.format(d.wrong_location)}</td>
-                    <td className="num">{nf.format(d.not_in_query)}</td>
-                    <td className="num">
-                      <Pct row={d} />
-                    </td>
-                    <td className="num">{nf.format(d.not_checked)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <div className="ccactions">
-            <button
-              type="button"
-              className="ghost"
-              onClick={() => saveCsv(buildDailyCsv(days, accuracy), dailyFileName())}
-            >
-              Download statistics (CSV)
-            </button>
-          </div>
-        </>
-      )}
     </div>
   )
 }
