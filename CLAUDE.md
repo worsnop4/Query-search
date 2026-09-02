@@ -459,6 +459,24 @@ against the real template — `scripts/test-putaway.mjs` also checks the OLE2
 signature, since a wrong container is rejected by the WMS however right the
 columns are.
 
+**"Re-check against Query" compares a finished count against Query as it
+stands now** — for when the WMS has been adjusted since. Two things about it
+matter:
+
+- **It does not read the WMS.** Query only moves when someone uploads a new
+  export, so the result screen shows *when* Query was last updated and spells
+  out the order: adjust the WMS → Update query → re-check. Without that the
+  button looks broken, because it keeps saying "still wrong".
+- **It never rewrites the count.** The re-check is held in separate state
+  beside the frozen result. A finished count's accuracy is a fact about the day
+  it was taken; if looking at it again could change it, the number would drift
+  and their history would stop meaning anything.
+
+A fix is not simply "the case is here now": an `opened_mismatch` needs the case
+back at the location **and** no longer flagged opened, because it took a
+shortage *and* a profit. Once re-checked, the put-away file drops the cases
+Query already agrees with — sending those again is what the WMS rejects.
+
 **A finished count can be reopened** from Recent counts. Counting happens on a
 phone; the reason, the action and the WMS file are done afterwards at a laptop,
 possibly by a different admin — so `set_session_followup()` deliberately has no

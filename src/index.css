@@ -1406,3 +1406,15 @@ table select {
   color: var(--accent-text);
   font-weight: 600;
 }
+
+/* "All adjustments have landed" - worth saying loudly, it is the good news. */
+.ccdoneline {
+  margin: 10px 0 0;
+  padding: 9px 12px;
+  border-radius: 7px;
+  background: var(--ok-bg);
+  border: 1px solid var(--ok-border);
+  color: var(--ok-text);
+  font-size: 14px;
+  font-weight: 550;
+}

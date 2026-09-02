@@ -20,6 +20,9 @@ import {
   totalsByDay,
   groupByArea,
   AREA_GROUPS,
+  recheckRow,
+  recheckRows,
+  RECHECK,
 } from '../src/lib/cycleCount.js'
 import { checker } from './lib.mjs'
 
@@ -330,6 +333,72 @@ check('every group in the report is defined',
       AREA_GROUPS.map((g) => g.label).join(','))
 check('exactly one group is the catch-all',
       AREA_GROUPS.filter((g) => g.catchAll).length === 1, 'one')
+
+console.log('\n--- re-checking a finished count against Query ---')
+
+const HERE = 'TRANSIT B02'
+const rc = (bucket, current) => recheckRow({ bucket }, current, HERE)
+
+// A wrong-location case is fixed once Query has it where it was counted.
+check('wrong location, now here -> fixed',
+      rc('wrong_location', { locations: [HERE], opened: false }) === 'fixed', 'fixed')
+check('wrong location, still elsewhere -> still wrong',
+      rc('wrong_location', { locations: ['REC-TRANSIT-01'], opened: false }) === 'still_wrong',
+      'still_wrong')
+// A case can sit in several places; being here is enough.
+check('here AND elsewhere still counts as fixed',
+      rc('wrong_location', { locations: ['REC-TRANSIT-01', HERE], opened: false }) === 'fixed',
+      'fixed')
+check('wrong location, vanished from Query -> gone',
+      rc('wrong_location', undefined) === 'gone', 'gone')
+
+// A case Query never knew about is fixed by a profit: it should now exist here.
+check('not in query, now here -> fixed',
+      rc('not_in_query', { locations: [HERE], opened: false }) === 'fixed', 'fixed')
+check('not in query, still absent -> still wrong',
+      rc('not_in_query', undefined) === 'still_wrong', 'still_wrong')
+check('not in query, appeared somewhere else -> still wrong',
+      rc('not_in_query', { locations: ['DUMMY'], opened: false }) === 'still_wrong',
+      'still_wrong')
+
+// The opened case needs BOTH halves: back here, and no longer flagged opened.
+check('opened mismatch, here and no longer opened -> fixed',
+      rc('opened_mismatch', { locations: [HERE], opened: false }) === 'fixed', 'fixed')
+check('opened mismatch, here but STILL opened -> still wrong',
+      rc('opened_mismatch', { locations: [HERE], opened: true }) === 'still_wrong',
+      'still_wrong')
+check('opened mismatch, closed but moved away -> still wrong',
+      rc('opened_mismatch', { locations: ['DUMMY'], opened: false }) === 'still_wrong',
+      'still_wrong')
+
+const problems = [
+  { case_no: 'A', bucket: 'wrong_location' },
+  { case_no: 'B', bucket: 'wrong_location' },
+  { case_no: 'C', bucket: 'not_in_query' },
+  { case_no: 'D', bucket: 'not_checked' },
+]
+const current = new Map([
+  ['A', { locations: [HERE], opened: false }],
+  ['B', { locations: ['SOMEWHERE-ELSE'], opened: false }],
+  ['C', { locations: [HERE], opened: false }],
+])
+const res = recheckRows(problems, current, HERE)
+
+check('two fixed, one outstanding',
+      res.fixed === 2 && res.outstanding === 1, `${res.fixed} / ${res.outstanding}`)
+// Never-scanned cases have no adjustment to have landed.
+check('never-scanned cases are left out',
+      !res.rows.some((r) => r.case_no === 'D'), 'excluded')
+check('every row keeps its original bucket',
+      res.rows.every((r) => r.bucket), 'kept')
+
+// The recorded count must survive being looked at again.
+check('re-checking does not touch the original rows',
+      problems.every((p) => !('recheck' in p)), 'untouched')
+
+check('every recheck value has a label and tone',
+      ['fixed', 'still_wrong', 'gone'].every((k) => RECHECK[k]?.label && RECHECK[k]?.tone),
+      Object.keys(RECHECK).join(', '))
 
 console.log('\n--- the five buckets are all named ---')
 check('every bucket has a label and tone',

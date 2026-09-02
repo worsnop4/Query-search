@@ -209,6 +209,71 @@ export function reportRows(scans, notChecked) {
 }
 
 /**
+ * Has a discrepancy been fixed since the count?
+ *
+ * WHAT THIS IS NOT: it does not read the WMS. It compares against whatever
+ * Query holds RIGHT NOW, which only changes when someone presses Update query
+ * and uploads a fresh WMS export. Adjust the WMS at 13:00 and this will keep
+ * saying "still wrong" until that export is loaded.
+ *
+ * It also never rewrites the count. A finished count's accuracy is a fact
+ * about the day it was taken - if re-checking could change it, the number
+ * would drift every time someone pressed a button and the history would stop
+ * meaning anything.
+ *
+ *   fixed        Query now agrees with what was counted
+ *   still_wrong  Query still has it as it was
+ *   gone         Query no longer has the case anywhere
+ */
+export function recheckRow(row, current, countedLocation) {
+  const here = !!current && (current.locations ?? []).includes(countedLocation)
+
+  switch (row.bucket) {
+    case 'wrong_location':
+      if (!current) return 'gone'
+      return here ? 'fixed' : 'still_wrong'
+
+    case 'not_in_query':
+      // The fix is a profit: the case should now exist, at this location.
+      if (!current) return 'still_wrong'
+      return here ? 'fixed' : 'still_wrong'
+
+    case 'opened_mismatch':
+      // The fix is a shortage AND a profit: back at this location, and no
+      // longer flagged as opened. Still here but still opened is half done.
+      if (!current) return 'gone'
+      return here && !current.opened ? 'fixed' : 'still_wrong'
+
+    default:
+      return 'still_wrong'
+  }
+}
+
+export const RECHECK = {
+  fixed: { label: 'Fixed', tone: 'ok' },
+  still_wrong: { label: 'Still wrong', tone: 'warn' },
+  gone: { label: 'Gone from Query', tone: 'bad' },
+}
+
+/**
+ * Re-check every discrepancy, and say how many are still outstanding.
+ *
+ * `current` is a Map of case number -> { locations, opened } read from Query a
+ * moment ago. Cases nobody scanned are left out: they were never handled, so
+ * there is no adjustment to have landed.
+ */
+export function recheckRows(rows, current, countedLocation) {
+  const out = rows
+    .filter((r) => r.bucket !== 'not_checked')
+    .map((r) => ({ ...r, recheck: recheckRow(r, current.get(r.case_no), countedLocation) }))
+  return {
+    rows: out,
+    fixed: out.filter((r) => r.recheck === 'fixed').length,
+    outstanding: out.filter((r) => r.recheck !== 'fixed').length,
+  }
+}
+
+/**
  * How the warehouse groups its areas, straight out of REPORT ACCURACY.xlsx.
  *
  * `calc_area()` in setup.sql already produces these buckets - it was written

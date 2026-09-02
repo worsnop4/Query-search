@@ -12,7 +12,10 @@ import {
   suggestedAction,
   totalsByDay,
   groupByArea,
+  recheckRows,
+  RECHECK,
 } from '../lib/cycleCount'
+import { useLastUpdate, formatWhen, relativeTime } from '../lib/useLastUpdate'
 import {
   searchLocations,
   currentLocks,
@@ -30,6 +33,7 @@ import {
   dailyStats,
   allCountRows,
   areaStats,
+  currentLocationsFor,
   planEntries,
   addPlanEntry,
   removePlanEntry,
@@ -522,6 +526,14 @@ function DoneScreen({ sessionId, onNew, onCountAnother, onError }) {
   // problems the screen lists.
   const [raw, setRaw] = useState({ scans: [], notChecked: [] })
   const [loading, setLoading] = useState(true)
+  // The live re-check. Held separately from `rows` on purpose: the recorded
+  // count must never be rewritten by looking at it again.
+  const [checked, setChecked] = useState(null)
+  const [checking, setChecking] = useState(false)
+
+  // So the screen can say what it is comparing against. Query only moves when
+  // someone uploads a new WMS export.
+  const { info: lastUpdate } = useLastUpdate('inventory')
   const [writing, setWriting] = useState(false)
 
   useEffect(() => {
@@ -555,7 +567,7 @@ function DoneScreen({ sessionId, onNew, onCountAnother, onError }) {
     setWriting(true)
     onError(null)
     try {
-      const bytes = await writePutawayXls(putawaySheet(summary, raw.scans))
+      const bytes = await writePutawayXls(putawaySheet(summary, putawayScans))
       saveBlob(
         new Blob([bytes], { type: 'application/vnd.ms-excel' }),
         putawayFileName(summary, localDate(summary.started_at))
@@ -567,10 +579,32 @@ function DoneScreen({ sessionId, onNew, onCountAnother, onError }) {
     }
   }
 
+  async function recheck() {
+    setChecking(true)
+    onError(null)
+    try {
+      const problems = rows.filter((r) => r.bucket !== 'not_checked')
+      const current = await currentLocationsFor(problems.map((r) => r.case_no))
+      setChecked(recheckRows(problems, current, summary.location))
+    } catch (err) {
+      onError(err.message)
+    } finally {
+      setChecking(false)
+    }
+  }
+
   if (loading) return <p className="muted">Working out the result...</p>
   if (!summary) return null
 
-  const putawayCount = putawayRows(summary, raw.scans).length
+  // Once re-checked, the put-away file drops the cases Query already agrees
+  // with. Sending those again is what the WMS rejects.
+  const putawayScans = checked
+    ? raw.scans.filter((s) => {
+        const r = checked.rows.find((x) => x.case_no === s.case_no)
+        return !r || r.recheck !== 'fixed'
+      })
+    : raw.scans
+  const putawayCount = putawayRows(summary, putawayScans).length
 
   const counts = {
     clean_match: Number(summary.clean_match),
@@ -654,11 +688,49 @@ function DoneScreen({ sessionId, onNew, onCountAnother, onError }) {
       <SessionFollowup summary={summary} counts={counts} onError={onError} />
 
       <div className="card">
-        <h3>
-          {work.length === 0
-            ? 'Nothing to adjust'
-            : `${nf.format(work.length)} case${work.length === 1 ? '' : 's'} to adjust`}
-        </h3>
+        <div className="cchead">
+          <h3>
+            {work.length === 0
+              ? 'Nothing to adjust'
+              : `${nf.format(work.length)} case${work.length === 1 ? '' : 's'} to adjust`}
+          </h3>
+          {work.length > 0 && (
+            <button
+              type="button"
+              className="ghost"
+              onClick={recheck}
+              disabled={checking}
+              title="Compare these cases against Query as it stands now"
+            >
+              {checking ? 'Checking...' : 'Re-check against Query'}
+            </button>
+          )}
+        </div>
+
+        {work.length > 0 && (
+          <p className="muted small">
+            Query was last updated {lastUpdate ? (
+              <>
+                <strong>{formatWhen(lastUpdate.uploaded_at)}</strong> (
+                {relativeTime(lastUpdate.uploaded_at)})
+              </>
+            ) : (
+              'at an unknown time'
+            )}
+            . Re-checking compares against that upload &mdash; adjust the WMS
+            first, then press <strong>Update query</strong> on the admin page,
+            then re-check.
+          </p>
+        )}
+
+        {checked && (
+          <p className={checked.outstanding === 0 ? 'ccdoneline' : 'muted small'}>
+            {checked.outstanding === 0
+              ? `All ${nf.format(checked.fixed)} adjustments have landed in Query.`
+              : `${nf.format(checked.fixed)} fixed, ${nf.format(checked.outstanding)} still outstanding.`}
+          </p>
+        )}
+
         {work.length > 0 && (
           <div className="tablewrap">
             <table>
@@ -666,11 +738,12 @@ function DoneScreen({ sessionId, onNew, onCountAnother, onError }) {
                 <tr>
                   <th>Case No</th>
                   <th>Problem</th>
-                  <th>Query says</th>
+                  <th>Query said at the time</th>
+                  {checked && <th>Query now</th>}
                 </tr>
               </thead>
               <tbody>
-                {work.map((r) => (
+                {(checked ? checked.rows : work).map((r) => (
                   <tr key={r.case_no}>
                     <td className="mono ccbreak">{r.case_no}</td>
                     <td>
@@ -684,6 +757,13 @@ function DoneScreen({ sessionId, onNew, onCountAnother, onError }) {
                         result: r.bucket === 'opened_mismatch' ? 'match' : r.bucket,
                       })}
                     </td>
+                    {checked && (
+                      <td>
+                        <span className={`pill ${RECHECK[r.recheck].tone}`}>
+                          {RECHECK[r.recheck].label}
+                        </span>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

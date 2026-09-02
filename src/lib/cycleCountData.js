@@ -157,6 +157,39 @@ export async function allCountRows(onProgress) {
   }
 }
 
+/**
+ * Where Query has these cases RIGHT NOW.
+ *
+ * Straight off the live inventory table, so it reflects the most recent
+ * "Update query" upload and nothing newer - there is no WMS connection.
+ *
+ * Chunked because `.in()` becomes a query string and a long one overflows it;
+ * case numbers run to 100 characters, so the chunks are small.
+ */
+export async function currentLocationsFor(caseNos) {
+  const CHUNK = 60
+  const list = [...new Set(caseNos)].filter(Boolean)
+  const out = new Map()
+
+  for (let i = 0; i < list.length; i += CHUNK) {
+    const slice = list.slice(i, i + CHUNK)
+    const { data, error } = await supabase
+      .from('inventory')
+      .select('case_no, location, is_case_opened')
+      .in('case_no', slice)
+    if (error) throw new Error(`Could not re-check Query: ${error.message}`)
+
+    for (const r of data ?? []) {
+      if (!out.has(r.case_no)) out.set(r.case_no, { locations: [], opened: false })
+      const e = out.get(r.case_no)
+      if (!e.locations.includes(r.location)) e.locations.push(r.location)
+      // Any row marked opened means opened - the same rule record_scan uses.
+      if (r.is_case_opened === 'Yes') e.opened = true
+    }
+  }
+  return out
+}
+
 /** Counted totals per area, and how big each area actually is. */
 export async function areaStats() {
   const [counted, sizes] = await Promise.all([
