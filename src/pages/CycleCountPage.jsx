@@ -55,6 +55,7 @@ import {
   putawayRows,
   putawayFileName,
   writePutawayXls,
+  cannotPutAway,
 } from '../lib/putaway'
 
 const nf = new Intl.NumberFormat()
@@ -605,6 +606,9 @@ function DoneScreen({ sessionId, onNew, onCountAnother, onError }) {
       })
     : raw.scans
   const putawayCount = putawayRows(summary, putawayScans).length
+  // Wrong place, but Query has them opened - the WMS refuses a put away for a
+  // case with quantity 0. They need a shortage and a profit instead.
+  const noPutaway = cannotPutAway(putawayScans)
 
   const counts = {
     clean_match: Number(summary.clean_match),
@@ -667,8 +671,9 @@ function DoneScreen({ sessionId, onNew, onCountAnother, onError }) {
           >
             Download result (CSV)
           </button>
-          {/* The file the WMS actually eats. Only the wrong-location cases go
-              in it - the other findings need a different WMS action. */}
+          {/* The file the WMS actually eats. Only wrong-location cases that
+              Query still has as FULL - the WMS refuses a put away for an
+              opened case, and the other findings need a different action. */}
           {putawayCount > 0 && (
             <button
               type="button"
@@ -683,6 +688,26 @@ function DoneScreen({ sessionId, onNew, onCountAnother, onError }) {
             </button>
           )}
         </div>
+
+        {noPutaway.length > 0 && (
+          <div className="warn ccnoputaway">
+            <strong>
+              {nf.format(noPutaway.length)} case
+              {noPutaway.length === 1 ? '' : 's'} cannot be put away.
+            </strong>{' '}
+            Query has {noPutaway.length === 1 ? 'it' : 'them'} as opened, so the
+            quantity is 0 and the WMS rejects a put away. These need a{' '}
+            <strong>shortage and a profit</strong> instead. They are left out of
+            the file above:
+            <ul>
+              {noPutaway.map((c) => (
+                <li key={c} className="mono">
+                  {c}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       <SessionFollowup summary={summary} counts={counts} onError={onError} />

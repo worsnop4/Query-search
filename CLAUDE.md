@@ -445,9 +445,18 @@ need to put case to row a and actual location at row b"* — and `Location Code`
 is the **actual** location, because a put away moves the case to where it
 really is.
 
-**Only `wrong_location` cases go in it.** A case Query has as opened needs a
-shortage *and* a profit; a case Query does not know needs a profit. Putting
-those in a put-away file would tell the WMS to do the wrong thing.
+**Only `wrong_location` cases that Query still has as FULL go in it.** Learned
+from the WMS rejecting a real upload: *"case qty 0, that mean case has been
+opened cannot put away anymore."* An opened case has no whole-case quantity,
+so the WMS will not move it — a wrong-location case that Query has as opened
+needs a **shortage and a profit** instead, and `cannotPutAway()` lists those on
+the result screen rather than dropping them silently. A case Query does not
+know about needs a profit, so it is out too.
+
+The two lists are disjoint and complete: every wrong-location case is either in
+the file or named as impossible, never both and never neither. There is a test
+for exactly that, because a case falling between them would simply never get
+fixed and nobody would notice.
 
 Written with SheetJS `bookType: 'biff8'`, which is Excel 97-2003 — the
 template's own `FileFormat 56`. Two traps: `XLSX.write(..., {type:'array'})`

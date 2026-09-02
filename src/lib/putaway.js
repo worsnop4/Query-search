@@ -13,13 +13,28 @@
 // filled; New Case No, Part No and Quantity stay empty, exactly as in the
 // blank template.
 //
-// ONLY WRONG-LOCATION CASES GO IN THIS FILE. A put away moves a case to where
-// it really is. The other findings need different WMS actions - a case Query
-// has as opened needs a shortage and a profit, and a case Query does not know
-// about needs a profit - so mixing them into one put-away file would tell the
-// WMS to do the wrong thing.
+// ONLY WRONG-LOCATION CASES THAT QUERY STILL HAS AS FULL GO IN THIS FILE.
+//
+// A put away moves a case to where it really is, and the WMS will only move a
+// whole case. If Query has the case as opened its quantity is 0, and the
+// upload is rejected: "case qty 0, case has been opened, cannot put away
+// anymore" - the real error this cost an afternoon.
+//
+// So an opened case in the wrong place cannot be put away at all. It needs a
+// shortage and a profit instead, which is a different WMS action and a
+// different file. Those cases are reported by cannotPutAway() rather than
+// silently dropped - leaving them out with no explanation would be worse than
+// the rejected upload, because nobody would know they still need doing.
+//
+// The other findings are excluded for the same reason: a case Query does not
+// know about needs a profit, not a put away.
 
 import { bucketOf } from './cycleCount.js'
+
+/** Query still has it as a whole case, so the WMS can move it. */
+function canPutAway(s) {
+  return bucketOf(s) === 'wrong_location' && !s.query_opened
+}
 
 export const PUTAWAY_SHEET = 'Sheet3'
 export const PUTAWAY_TITLE = 'Case List'
@@ -39,9 +54,23 @@ export const PUTAWAY_HEADERS = [
  */
 export function putawayRows(session, scans) {
   return scans
-    .filter((s) => bucketOf(s) === 'wrong_location')
+    .filter(canPutAway)
     .map((s) => [s.case_no, session.location, '', '', ''])
     .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+}
+
+/**
+ * Cases in the wrong place that the WMS will NOT accept a put away for,
+ * because Query has them opened and an opened case has quantity 0.
+ *
+ * They still need fixing - as a shortage and a profit - so they are handed
+ * back to be listed rather than quietly left out of the file.
+ */
+export function cannotPutAway(scans) {
+  return scans
+    .filter((s) => bucketOf(s) === 'wrong_location' && s.query_opened)
+    .map((s) => s.case_no)
+    .sort((a, b) => String(a).localeCompare(String(b)))
 }
 
 /** The whole sheet, as an array of arrays, title row and headers included. */

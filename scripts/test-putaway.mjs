@@ -21,6 +21,7 @@ import {
   putawaySheet,
   putawayFileName,
   writePutawayXls,
+  cannotPutAway,
 } from '../src/lib/putaway.js'
 import { checker } from './lib.mjs'
 
@@ -36,6 +37,9 @@ const scans = [
   { case_no: 'IS-A-MATCH',           result: 'match',          query_opened: false },
   { case_no: 'NOT-IN-QUERY',         result: 'not_in_query',   query_opened: false },
   { case_no: 'QUERY-SAYS-OPENED',    result: 'match',          query_opened: true },
+  // Wrong place AND opened. The WMS answers "case qty 0, case has been opened,
+  // cannot put away anymore" - so this must never reach the file.
+  { case_no: 'WRONG-PLACE-BUT-OPENED', result: 'wrong_location', query_opened: true },
 ]
 
 console.log('--- only wrong-location cases belong in a put away ---')
@@ -54,6 +58,36 @@ check('sorted by case number',
       rows.map((r) => r[0]).join('|') ===
         'CASE, WITH COMMA|LAID16306DN02SX00025|LAID16306DN02SX00031',
       rows.map((r) => r[0]).join('|'))
+
+console.log('\n--- an OPENED case cannot be put away ---')
+
+// The real WMS error: "case qty 0, case has been opened, cannot put away
+// anymore". An opened case has no whole-case quantity to move.
+check('a wrong-place OPENED case is not in the file',
+      !rows.some((r) => r[0] === 'WRONG-PLACE-BUT-OPENED'), 'excluded')
+// ...but it must not disappear either: it still needs fixing, as a shortage
+// and a profit.
+check('it is reported instead of dropped',
+      cannotPutAway(scans).join('|') === 'WRONG-PLACE-BUT-OPENED',
+      cannotPutAway(scans).join('|'))
+check('a full wrong-place case is NOT reported as unputawayable',
+      !cannotPutAway(scans).includes('LAID16306DN02SX00031'), 'ok')
+// Only wrong-location cases can be blocked this way - a match that Query has
+// as opened was never going into a put-away file at all.
+check('an opened MATCH is not listed either',
+      !cannotPutAway(scans).includes('QUERY-SAYS-OPENED'), 'ok')
+check('nothing opened means nothing to report',
+      cannotPutAway(scans.filter((s) => !s.query_opened)).length === 0, '0')
+
+// The two lists must never overlap: a case is either in the file or named as
+// impossible, never both and never neither.
+const inFile = new Set(rows.map((r) => r[0]))
+const blocked = new Set(cannotPutAway(scans))
+check('no case is both in the file and blocked',
+      [...inFile].every((c) => !blocked.has(c)), 'disjoint')
+check('every wrong-location case is in one list or the other',
+      scans.filter((s) => s.result === 'wrong_location')
+        .every((s) => inFile.has(s.case_no) || blocked.has(s.case_no)), 'all accounted for')
 
 console.log('\n--- the two columns the user asked for ---')
 check('column A is the case number', rows[0][0] === 'CASE, WITH COMMA', rows[0][0])
