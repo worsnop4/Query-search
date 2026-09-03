@@ -709,6 +709,19 @@ export default function AdminPage() {
         cancelled upload leaves the live data untouched.
       </p>
 
+      {/* The two tools that are not about uploading, kept at the top where
+          they are reached rather than buried under the upload cards. Still
+          only here: the search page is public and belongs to the operation
+          team, and both of these are admin jobs. */}
+      <nav className="adminnav">
+        <Link className="btn" to="/cycle-count">
+          Cycle count
+        </Link>
+        <Link className="btn" to="/breakdown">
+          Breakdown Query
+        </Link>
+      </nav>
+
       <Roster others={others} />
 
       {UPLOADS.map((u) => (
@@ -723,50 +736,6 @@ export default function AdminPage() {
       ))}
 
       <DownloadCard blockedBy={uploaderOf('inventory')?.display_name ?? null} />
-
-      <CycleCountCard />
-
-      <BreakdownCard />
-    </div>
-  )
-}
-
-// The daily Breakdown Query, which used to be a hand-built Excel file that
-// struggled to open. Same place as the cycle count: admin only.
-function BreakdownCard() {
-  return (
-    <div className="card">
-      <h2>Breakdown Query</h2>
-      <p className="muted small">
-        One row per part number with its stock in every area, plus the Stock
-        sheet of parts below the minimum. Downloads as a zipped Excel file.
-      </p>
-      <div className="ccactions">
-        <Link className="btn" to="/breakdown">
-          Open Breakdown
-        </Link>
-      </div>
-    </div>
-  )
-}
-
-// The only way into the cycle count. Deliberately not in the top bar: the
-// search page is public and belongs to the operation team, and counting is an
-// admin job.
-function CycleCountCard() {
-  return (
-    <div className="card">
-      <h2>Cycle count</h2>
-      <p className="muted small">
-        Scan one location and compare it against Query. Two admins can count
-        different locations at the same time; a location being counted is
-        locked until that count is finished.
-      </p>
-      <div className="ccactions">
-        <Link className="btn" to="/cycle-count">
-          Open cycle count
-        </Link>
-      </div>
     </div>
   )
 }
