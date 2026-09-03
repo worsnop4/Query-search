@@ -69,6 +69,28 @@ for (const path of INVENTORY_FILES) {
   const ts = first.inbound_time
   check('inbound_time parsed', ts === null || /^\d{4}-\d{2}-\d{2}/.test(String(ts)), String(ts))
 
+  // The WMS writes local time with no offset, and these columns are
+  // timestamptz - so without an offset Postgres reads them as UTC and every
+  // value lands seven hours early. Harmless while nothing showed a date; the
+  // transit monitor ages cases in whole DAYS, and 15.6% of the rows sitting at
+  // TRANSIT carry a stored hour of 17:00 or later, which would tip them onto
+  // the wrong calendar day.
+  const stamps = out.rows.slice(0, 20000)
+    .flatMap((r) => [r.inbound_time, r.first_inbound_time])
+    .filter(Boolean)
+  const zoned = stamps.filter((s) => /(?:Z|[+-]\d{2}:\d{2})$/.test(String(s)))
+  check('every timestamp carries a zone', zoned.length === stamps.length,
+        `${stamps.length - zoned.length} of ${stamps.length} without one`)
+  check('and it is WIB (+07:00)',
+        stamps.every((s) => String(s).endsWith('+07:00')),
+        String(stamps[0]))
+  // The offset must shift the instant, not just decorate the text.
+  const asInstant = new Date(stamps[0])
+  check('which really moves the instant back 7 hours',
+        asInstant.toISOString().slice(11, 13) ===
+          String((Number(String(stamps[0]).slice(11, 13)) + 17) % 24).padStart(2, '0'),
+        `${stamps[0]} -> ${asInstant.toISOString()}`)
+
   const blankPn = out.rows.filter((r) => !r.part_number).length
   check('no blank part numbers', blankPn === 0, String(blankPn))
 }

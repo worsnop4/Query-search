@@ -28,6 +28,7 @@ real data and is not obvious from the code.
 | Cycle count | **Working** — needs `08` → … → `16`. Dashboard-first, scan with undo, 5 buckets, location lock, per-area totals, monthly plan, CSV exports and the WMS put-away `.xls` |
 | Dashboard | **Not started** |
 | Breakdown pivot | **Built** — `/breakdown`, admin only. Zipped `.xlsx`, 1.6 MB, no new SQL |
+| Transit monitoring | **Built** — `/transit`, admin only. Needs `17_part_type_and_transit.sql` **and a PFEP re-upload** for Part Type |
 
 Repo: `https://github.com/worsnop4/Query-search.git` (private)
 Supabase project URL: `https://smjzdmcaojaumdtrqdpg.supabase.co`
@@ -683,6 +684,40 @@ list cannot recompute itself.
 `breakdownData.js` holds the paged read. **No new SQL** — the `breakdown` view
 already had Yanfeng, Baosteel and VDC right.
 
+### Transit monitoring: how long a case has sat at TRANSIT
+
+`D:\Daily\Transit monitoring\Transit Monitoring (version 1).xlsx`, analysed
+3 Sep 2026. Their sheet pastes the export filtered to `location = TRANSIT`,
+looks up `Part Type` from PFEP, keeps only `SMALL PART`, then ages each case.
+
+**`location = 'TRANSIT'` exactly** — the user's rule. The *area* called
+"Transit" spans 86 locations; this is only the one bare bay: 6,893 inventory
+rows, **3,360 cases**, 1,188 parts.
+
+**The external workbook is not needed.** Their aging came from
+`INbound monitoring (new).xlsb` by `XLOOKUP` on the case number. Compared with
+our own `first_inbound_time` the two differ by about three minutes, and aging
+uses only the DATE — so it is computed from our data instead, which also
+removes the blank rows their sheet showed wherever the lookup missed.
+
+**Their day labels were off by one and are now corrected.** `"1 DAY"` counted
+cases that arrived that morning. Settled with the user: **a case that arrived
+today is 0 days, shown as "Today"**, so "3 days" means three days. 0–3 is fine,
+**more than 3 needs following up**.
+
+**Their detail list capped at 10 days** (`Aging >= 2 AND Aging <= 10`), hiding
+the very worst cases. The user asked for "all case more than 3 days", so the
+last bucket is open-ended.
+
+**Days are counted in Asia/Jakarta**, and this is the feature that forced the
+timestamp timezone fix — see the note below. A date subtraction is exactly
+where a 7-hour shift changes the answer.
+
+`src/lib/transit.js` is pure and covered by `scripts/test-transit.mjs`;
+`transitData.js` reads the `transit_cases` view, which groups 6,893 rows into
+3,360 cases in Postgres rather than in the browser. A case counts as
+small-part if **any** part in it is one, matching their `FILTER`.
+
 ### Search does three queries, not a join
 
 `SearchPage` queries `inventory` directly (paginated, `count: 'exact'`), fetches
@@ -851,8 +886,10 @@ new file shape appears.
   "Partial search" below.
 - **Database keeps the name `inventory`** even though the UI says "Query". The
   user explicitly asked for website-only renaming. Do not rename DB objects.
-- **Master data imports four columns**: Part Number, Part Name, Car Type,
-  NEW DLOC (index 9 — *not* OLD DLOC at index 8, they sit adjacent).
+- **Master data imports five columns**: Part Number, Part Name, Car Type,
+  NEW DLOC (index 9 — *not* OLD DLOC at index 8, they sit adjacent) and
+  **Part Type** (column AR, added 3 Sep 2026 for the transit monitor; values
+  like `SMALL PART`).
 
 ---
 
@@ -892,11 +929,15 @@ new file shape appears.
 
 ### Known issues, not yet raised as urgent
 
-8. **Timestamp timezone.** `inbound_time` / `first_inbound_time` arrive as text
-   (`"2026-01-11 19:10:32"`), almost certainly local WIB (UTC+7), and are stored
-   into `timestamptz` where Postgres reads them as UTC — a 7-hour shift. Nothing
-   displays these columns yet, so it is currently harmless. Fix before building
-   any feature that shows or filters by time.
+8. ~~**Timestamp timezone.**~~ **FIXED 3 Sep 2026.** `normTimestamp()` in
+   `parse.js` now attaches `+07:00` to the WMS's local timestamps, so
+   `timestamptz` stores the right instant. No backfill was run and none is
+   needed: `swap_inventory()` truncates and re-inserts, so **the next Query
+   upload corrects every row** — safer than a shifting `UPDATE` that would be
+   very hard to notice if it ran twice. Until that upload, aging is a day out
+   for the 15.6% of TRANSIT rows whose stored hour is 17:00 or later.
+   `test-parser.mjs` asserts every timestamp carries `+07:00` and that the
+   offset really moves the instant.
 9. `package.json` still has `"name": "inventory-search"`. Cosmetic, internal.
 10. `XIN1` has a column and mapping but zero rows in every file seen so far.
     Expected, not a bug.

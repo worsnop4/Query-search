@@ -720,6 +720,9 @@ export default function AdminPage() {
         <Link className="btn" to="/breakdown">
           Breakdown Query
         </Link>
+        <Link className="btn" to="/transit">
+          Transit monitoring
+        </Link>
       </nav>
 
       <Roster others={others} />

@@ -25,6 +25,8 @@ const CycleCountPage = lazy(() => import('./pages/CycleCountPage'))
 // Also lazy: it pulls SheetJS and fflate only when someone builds the file.
 const BreakdownPage = lazy(() => import('./pages/BreakdownPage'))
 
+const TransitPage = lazy(() => import('./pages/TransitPage'))
+
 const nf = new Intl.NumberFormat()
 
 function RequireAuth({ children }) {
@@ -162,6 +164,16 @@ export default function App() {
                 <RequireAuth>
                   <Suspense fallback={<p className="muted">Loading breakdown...</p>}>
                     <BreakdownPage />
+                  </Suspense>
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/transit"
+              element={
+                <RequireAuth>
+                  <Suspense fallback={<p className="muted">Loading transit...</p>}>
+                    <TransitPage />
                   </Suspense>
                 </RequireAuth>
               }

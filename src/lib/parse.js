@@ -54,14 +54,43 @@ function normNumber(v) {
   return Number.isFinite(n) ? n : null
 }
 
+// The warehouse runs on WIB (UTC+7) and the WMS writes local time with no
+// offset, so an offset has to be attached here.
+const WIB_OFFSET = '+07:00'
+
 // Timestamps arrive as text ("2026-01-11 19:10:32") in every file seen so far.
 // cellDates:true means a genuinely date-formatted cell arrives as a Date, so
 // handle both.
+//
+// THE OFFSET IS NOT OPTIONAL. These columns are `timestamptz`, so a bare
+// "2026-01-11 19:10:32" is read as UTC - seven hours off. Nothing displayed
+// them until the transit monitor, which ages a case in whole DAYS: measured on
+// the 6,893 rows sitting at TRANSIT, 1,077 of them (15.6%) carry a stored hour
+// of 17:00 or later, and every one of those would land on the wrong calendar
+// day and be reported a day out.
+//
+// A Date from SheetJS is a different case: cellDates has already turned the
+// cell into an instant, so it is passed through as-is.
 function normTimestamp(v) {
   if (v === null || v === undefined || v === '') return null
   if (v instanceof Date) return isNaN(v.getTime()) ? null : v.toISOString()
+
   const s = String(v).trim()
-  return s === '' ? null : s
+  if (s === '') return null
+
+  // Already carries a zone ("...Z", "+07:00", "-05:00")? Leave it alone.
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(s)) return s
+
+  // "2026-01-11 19:10:32" or "2026-01-11T19:10:32", with optional fraction.
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)$/)
+  if (m) return `${m[1]}T${m[2]}${WIB_OFFSET}`
+
+  // A date with no time is midnight local, not midnight UTC.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return `${s}T00:00:00${WIB_OFFSET}`
+
+  // Anything else is handed over untouched rather than guessed at - Postgres
+  // will reject it loudly, which is better than storing a wrong instant.
+  return s
 }
 
 // --- field definitions ------------------------------------------------------
@@ -87,6 +116,10 @@ const MASTER_FIELDS = [
   { key: 'part_name',   names: ['PART NAME'],   required: true,  norm: normText },
   { key: 'car_type',    names: ['CAR TYPE'],    required: false, norm: normText },
   { key: 'dloc',        names: ['NEW DLOC'],    required: false, norm: normText },
+  // Column AR in the PFEP file, values like "SMALL PART". The transit monitor
+  // watches small parts specifically, and nothing else in the app has needed
+  // it until now.
+  { key: 'part_type',   names: ['PART TYPE'],   required: false, norm: normText },
 ]
 
 // --- workbook helpers -------------------------------------------------------
