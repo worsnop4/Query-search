@@ -25,9 +25,14 @@ export const RESULTS = {
     hint: 'Right place, and Query agrees about the case.',
   },
   opened_mismatch: {
-    label: 'Query says opened',
+    // "Here but opened" rather than "Query says opened": this bucket is only
+    // for cases in the RIGHT place that Query has as opened. A case in the
+    // wrong place that is also opened counts as wrong_location, so a bare
+    // "Query says opened" label read as though it covered both and made the
+    // counter look wrong next to the put-away warning.
+    label: 'Here but opened',
     tone: 'warn',
-    hint: 'Found here as a full case, but Query has it as opened.',
+    hint: 'In the right place, but Query has it as opened.',
   },
   wrong_location: {
     label: 'Wrong location',
@@ -175,9 +180,13 @@ export function describeScan(scan) {
       : 'Here'
     return scan.query_opened ? `${here} - but Query has it as OPENED` : here
   }
-  if (where.length === 0) return 'Query has no location for it'
-  if (where.length === 1) return `Query says ${where[0]}`
-  return `Query says ${where[0]} and ${where.length - 1} more`
+  // The opened flag has to show on a wrong-location case too: it is what stops
+  // that case going into the put-away file, and without it the screen said
+  // nothing while the warning below counted seven of them.
+  const opened = scan.query_opened ? ' - and OPENED' : ''
+  if (where.length === 0) return `Query has no location for it${opened}`
+  if (where.length === 1) return `Query says ${where[0]}${opened}`
+  return `Query says ${where[0]} and ${where.length - 1} more${opened}`
 }
 
 /**

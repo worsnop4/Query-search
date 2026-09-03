@@ -86,7 +86,7 @@ check('an unknown case is False', rows[2].Status === 'False', rows[2].Status)
 // The finding that matters most must not hide inside a plain "False".
 check('a Query-says-opened case is False', rows[3].Status === 'False', rows[3].Status)
 check('...but Finding says exactly what it was',
-      rows[3].Finding === 'Query says opened', rows[3].Finding)
+      rows[3].Finding === 'Here but opened', rows[3].Finding)
 check('a never-scanned case is Need check', rows[4].Status === 'Need check', rows[4].Status)
 
 // A case in several places must not be silently truncated to the first.
@@ -203,8 +203,8 @@ check('the status does not leak either',
 
 // The finding that matters most must survive this path too.
 const opened = arows.find((r) => r['Case Number'] === 'NEW-3')
-check('a Query-says-opened case keeps its finding',
-      opened.Finding === 'Query says opened' && opened.Status === 'False',
+check('an opened-in-Query case keeps its finding',
+      opened.Finding === 'Here but opened' && opened.Status === 'False',
       `${opened.Status} / ${opened.Finding}`)
 
 const acsv = buildAllCsv(viewRows)

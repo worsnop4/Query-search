@@ -148,6 +148,16 @@ check('wrong location names where it should be',
       describeScan({ result: 'wrong_location', system_locations: ['LHO-NN24-301'] }) ===
         'Query says LHO-NN24-301',
       describeScan({ result: 'wrong_location', system_locations: ['LHO-NN24-301'] }))
+// A wrong-location case that is ALSO opened cannot be put away, and the screen
+// said nothing about it while the warning underneath counted seven of them.
+check('a wrong-location case that is also opened says so',
+      describeScan({ result: 'wrong_location', system_locations: ['X'], query_opened: true })
+        === 'Query says X - and OPENED',
+      describeScan({ result: 'wrong_location', system_locations: ['X'], query_opened: true }))
+// The bucket label is only for cases in the RIGHT place - the old wording
+// read as though it covered both and made the counter look wrong.
+check('the opened bucket is named for the right place only',
+      RESULTS.opened_mismatch.label === 'Here but opened', RESULTS.opened_mismatch.label)
 
 console.log('\n--- the adjustment worklist ---')
 
