@@ -22,6 +22,9 @@ const AdminPage = lazy(() => import('./pages/AdminPage'))
 // warehouse and must not drag SheetJS along behind it.
 const CycleCountPage = lazy(() => import('./pages/CycleCountPage'))
 
+// Also lazy: it pulls SheetJS and fflate only when someone builds the file.
+const BreakdownPage = lazy(() => import('./pages/BreakdownPage'))
+
 const nf = new Intl.NumberFormat()
 
 function RequireAuth({ children }) {
@@ -149,6 +152,16 @@ export default function App() {
                 <RequireAuth>
                   <Suspense fallback={<p className="muted">Loading cycle count...</p>}>
                     <CycleCountPage />
+                  </Suspense>
+                </RequireAuth>
+              }
+            />
+            <Route
+              path="/breakdown"
+              element={
+                <RequireAuth>
+                  <Suspense fallback={<p className="muted">Loading breakdown...</p>}>
+                    <BreakdownPage />
                   </Suspense>
                 </RequireAuth>
               }

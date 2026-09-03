@@ -27,7 +27,7 @@ real data and is not obvious from the code.
 | Vercel deploy | Live, auto-deploys from `main` |
 | Cycle count | **Working** — needs `08` → … → `16`. Dashboard-first, scan with undo, 5 buckets, location lock, per-area totals, monthly plan, CSV exports and the WMS put-away `.xls` |
 | Dashboard | **Not started** |
-| Breakdown pivot | **Not started** — has open questions, see below |
+| Breakdown pivot | **Built** — `/breakdown`, admin only. Zipped `.xlsx`, 1.6 MB, no new SQL |
 
 Repo: `https://github.com/worsnop4/Query-search.git` (private)
 Supabase project URL: `https://smjzdmcaojaumdtrqdpg.supabase.co`
@@ -611,6 +611,78 @@ not. The assignee is who was *asked*, not a condition on the answer —
 `done_by` records who actually did it. Same reason `unique (plan_date,
 location)` stays: one location on one day is one job, whoever it belongs to.
 
+### Breakdown Query: their daily Excel, rebuilt
+
+`D:\Daily\Breakdown Querry\Template\September\` holds the template and the
+day's output. They built it by hand every morning and it barely opened on an
+old laptop. Analysed 2 Sep 2026.
+
+**Why it was so heavy: the Breakdown sheet had 195,704 rows for 11,419 parts —
+every part repeated ~17 times**, because it was one row per *inventory row*
+rather than per part. The Query sheet held another 195,704 raw rows. The real
+answer is ~11,800 rows, and the `breakdown` view in `setup.sql` already
+computed it — verified against their own file to the piece (`MZ000140-PYX`:
+DLOC 36, HR 0, OF 0, Transit 72, total 108).
+
+**Three bugs in their spreadsheet, all now fixed:**
+
+- **Yanfeng was displayed but never counted.** Their OW total is
+  `=SUM(J8:Q8)`, which stops at CRRC; Yanfeng is column R, outside the range.
+  Measured in their own file: **852,650 pieces** missing from the totals, and
+  part `24533127` shows Yanfeng 400 with an OW total of 0.
+- **Baosteel had no column at all**, so its stock was invisible and uncounted.
+  Adding it makes the sheet one column wider than theirs.
+- **The `VDC5` heading never matched the data**, which says `VDC`, and
+  `SUMIFS` matches on that text — so the column always read 0. The label stays
+  "VDC5" because that is what they call it; only the lookup changed.
+
+Also noted, not fixed: their Year formula maps 17→2017 … 15→2025 with **no
+entry for 26**, so Year is `-` on all current stock, and `12` appears twice.
+The Query sheet's Part Name / DLOC / Car Type came from `XLOOKUP` into a
+OneDrive workbook (`[MASDAT.xlsb]`); that external link is gone, replaced by
+`master_data`.
+
+**Their formulas, reproduced exactly** (`rowFormulas()` in `breakdown.js`):
+
+```
+LOC TOTAL   = SUM(DLOC..Transit)
+Status      = IF(LOC < locMin, "NOK", "OK")      GAP = LOC - locMin
+OW TOTAL    = SUM(Luzhou..Baosteel)
+Status      = IF((OW + LOC) < owMin, "NOK", "OK") Gap = LOC + OW - owMin
+NON SAIC    = XIN1 + XIN2
+Grand Total = LOC + OW + NON SAIC
+```
+
+The SAIC check is **LOC + OW**, not the grand total — NON-SAIC is a different
+supplier group and deliberately does not count towards it. Verified against
+their row `MZ000140-PYX`: LOC 108 → gap −92 and −392.
+
+**The Stock sheet lists parts below the minimum**, and **JPH is the only
+input**: `Qty = (JPH × hours) + 1` and `Minimal Stock = Qty × 2`, so 14 × 8 + 1
+= 113 → 226. Both are editable on the page. Their template's
+`VLOOKUP(...,24,...)` points at the NON-SAIC column, but the file they actually
+use shows the **grand** total — proved with `10189234` (LOC 16, NON-SAIC 8,
+Stock sheet shows 24), so the grand total is what is reproduced.
+
+**Cells are written as live FORMULAS, not numbers**, so the two thresholds and
+the JPH block still recalculate in Excel exactly as their template does. That
+costs size — measured on 11,813 real parts:
+
+```
+xlsx with formulas   11.70 MB     zipped 1.60 MB
+xlsx with values      9.14 MB     zipped 1.21 MB
+their .xlsb           8.32 MB     (195k rows)
+```
+
+Zipping is worth it here (86% off), unlike the inventory `.xlsx` export where
+it saved almost nothing — this file is mostly repetitive XML. Which parts
+appear on the Stock sheet still depends on the threshold at download time; that
+list cannot recompute itself.
+
+`src/lib/breakdown.js` is pure and covered by `scripts/test-breakdown.mjs`;
+`breakdownData.js` holds the paged read. **No new SQL** — the `breakdown` view
+already had Yanfeng, Baosteel and VDC right.
+
 ### Search does three queries, not a join
 
 `SearchPage` queries `inventory` directly (paginated, `count: 'exact'`), fetches
@@ -804,19 +876,16 @@ new file shape appears.
    (called shortage) and input again with full case (porfit)"* — have no
    template yet. Ask for those two blank templates when they are wanted.
 
-### Open questions, blocking the Breakdown feature
+### Answered while building the Breakdown (2 Sep 2026)
 
-4. **Should the Breakdown show only parts with stock, or all active master parts
-   including zero-stock ones?** 7,172 master parts have no inventory rows. A
-   zero-stock part is exactly what the min-stock Status/GAP column is meant to
-   catch, so it arguably belongs — but PFEP also contains `INACTIVE` parts that
-   would clutter it. Recommendation given: build from `master_data` outward with
-   inactive filtered out. **Not answered.**
-5. **Does `Transit` collapse into one column?** It is reachable two ways — Stage
-   1 (`Stock Area-Temp`, `Hold Area`) and the OW location match (`LOC` →
-   Transit). Currently one column. **Not answered.**
-6. **Is the NON-SAIC group only XIN1 and XIN2**, with every other OW area in the
-   SAIC group? Assumed yes. **Not confirmed.**
+- **Only parts with stock**, the user's choice — matching what their own file
+  does today. The 7,172 master parts with no inventory rows stay out.
+- **NON-SAIC is XIN1 and XIN2**, confirmed by their REPORT ACCURACY grouping
+  and by the Breakdown template's own columns.
+- **`Transit` is one column**, as in their template.
+
+### Still open
+
 7. **Dashboard "per Location" — raw location string or grouped by Area?** Raw
    locations are numerous; Area is probably more useful. Both views exist
    (`dashboard_by_location`, `dashboard_by_area`). **Not answered.**

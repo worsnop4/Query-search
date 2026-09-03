@@ -1418,3 +1418,40 @@ table select {
   font-size: 14px;
   font-weight: 550;
 }
+
+/* Breakdown thresholds: two stock levels plus the JPH block. */
+.bdopts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+
+@media (max-width: 620px) {
+  .bdopts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.bdopts label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.bdopts input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bdopts input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

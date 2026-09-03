@@ -725,6 +725,27 @@ export default function AdminPage() {
       <DownloadCard blockedBy={uploaderOf('inventory')?.display_name ?? null} />
 
       <CycleCountCard />
+
+      <BreakdownCard />
+    </div>
+  )
+}
+
+// The daily Breakdown Query, which used to be a hand-built Excel file that
+// struggled to open. Same place as the cycle count: admin only.
+function BreakdownCard() {
+  return (
+    <div className="card">
+      <h2>Breakdown Query</h2>
+      <p className="muted small">
+        One row per part number with its stock in every area, plus the Stock
+        sheet of parts below the minimum. Downloads as a zipped Excel file.
+      </p>
+      <div className="ccactions">
+        <Link className="btn" to="/breakdown">
+          Open Breakdown
+        </Link>
+      </div>
     </div>
   )
 }
