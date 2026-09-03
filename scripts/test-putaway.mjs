@@ -67,15 +67,16 @@ check('a wrong-place OPENED case is not in the file',
       !rows.some((r) => r[0] === 'WRONG-PLACE-BUT-OPENED'), 'excluded')
 // ...but it must not disappear either: it still needs fixing, as a shortage
 // and a profit.
-check('it is reported instead of dropped',
-      cannotPutAway(scans).join('|') === 'WRONG-PLACE-BUT-OPENED',
+//
+// EVERY opened case is listed, wherever Query has it. Opening a case in the
+// WMS moves it, so the location an opened case reports is a consequence of the
+// opening rather than a separate problem - and none of them can be put away.
+check('every opened case is reported instead of dropped',
+      cannotPutAway(scans).join('|') === 'QUERY-SAYS-OPENED|WRONG-PLACE-BUT-OPENED',
       cannotPutAway(scans).join('|'))
 check('a full wrong-place case is NOT reported as unputawayable',
       !cannotPutAway(scans).includes('LAID16306DN02SX00031'), 'ok')
-// Only wrong-location cases can be blocked this way - a match that Query has
-// as opened was never going into a put-away file at all.
-check('an opened MATCH is not listed either',
-      !cannotPutAway(scans).includes('QUERY-SAYS-OPENED'), 'ok')
+check('a clean match is not listed', !cannotPutAway(scans).includes('IS-A-MATCH'), 'ok')
 check('nothing opened means nothing to report',
       cannotPutAway(scans.filter((s) => !s.query_opened)).length === 0, '0')
 

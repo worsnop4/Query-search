@@ -31,9 +31,15 @@
 
 import { bucketOf } from './cycleCount.js'
 
-/** Query still has it as a whole case, so the WMS can move it. */
+/**
+ * Query still has it as a whole case, so the WMS can move it.
+ *
+ * The `wrong_location` bucket already excludes opened cases - opening a case
+ * moves it, so every opened case is bucketed as opened whatever its location -
+ * which means this is just "in the wrong place".
+ */
 function canPutAway(s) {
-  return bucketOf(s) === 'wrong_location' && !s.query_opened
+  return bucketOf(s) === 'wrong_location'
 }
 
 export const PUTAWAY_SHEET = 'Sheet3'
@@ -60,15 +66,18 @@ export function putawayRows(session, scans) {
 }
 
 /**
- * Cases in the wrong place that the WMS will NOT accept a put away for,
- * because Query has them opened and an opened case has quantity 0.
+ * Cases the WMS will NOT accept a put away for, because Query has them opened
+ * and an opened case has quantity 0.
  *
- * They still need fixing - as a shortage and a profit - so they are handed
- * back to be listed rather than quietly left out of the file.
+ * Every opened case, wherever Query says it is - the location an opened case
+ * reports is a consequence of the opening, not a separate problem, and they
+ * all need the same fix: a shortage and a profit.
+ *
+ * They are handed back to be listed rather than quietly left out of the file.
  */
 export function cannotPutAway(scans) {
   return scans
-    .filter((s) => bucketOf(s) === 'wrong_location' && s.query_opened)
+    .filter((s) => bucketOf(s) === 'opened_mismatch')
     .map((s) => s.case_no)
     .sort((a, b) => String(a).localeCompare(String(b)))
 }

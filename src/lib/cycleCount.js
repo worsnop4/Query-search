@@ -25,14 +25,9 @@ export const RESULTS = {
     hint: 'Right place, and Query agrees about the case.',
   },
   opened_mismatch: {
-    // "Here but opened" rather than "Query says opened": this bucket is only
-    // for cases in the RIGHT place that Query has as opened. A case in the
-    // wrong place that is also opened counts as wrong_location, so a bare
-    // "Query says opened" label read as though it covered both and made the
-    // counter look wrong next to the put-away warning.
-    label: 'Here but opened',
+    label: 'Opened in Query',
     tone: 'warn',
-    hint: 'In the right place, but Query has it as opened.',
+    hint: 'Query has this case as opened, wherever it says the case is.',
   },
   wrong_location: {
     label: 'Wrong location',
@@ -100,9 +95,19 @@ export function actionLabel(actions) {
  * right place and still be wrong.
  */
 export function bucketOf(scan) {
-  if (scan.result === 'match') {
-    return scan.query_opened ? 'opened_mismatch' : 'clean_match'
-  }
+  // THE OPENED FLAG WINS, WHATEVER THE LOCATION.
+  //
+  // The user's own rule: "we can never meet case right location but open,
+  // because every case open will automatic change location". Opening a case in
+  // the WMS moves it, so "right place AND opened" cannot happen - which made
+  // this bucket permanently 0 while every opened case hid inside
+  // wrong_location, and the put-away warning underneath counted seven of them
+  // against a counter reading zero.
+  //
+  // Every opened case needs the same thing - a shortage and a profit - so they
+  // belong together regardless of where Query thinks they are.
+  if (scan.query_opened) return 'opened_mismatch'
+  if (scan.result === 'match') return 'clean_match'
   return scan.result
 }
 
@@ -174,19 +179,22 @@ export function accuracy(counts) {
 export function describeScan(scan) {
   const where = scan.system_locations ?? []
   if (scan.result === 'not_in_query') return 'Not in Query'
-  if (scan.result === 'match') {
-    const here = where.length > 1
-      ? `Here, and in ${where.length - 1} other location${where.length > 2 ? 's' : ''}`
-      : 'Here'
-    return scan.query_opened ? `${here} - but Query has it as OPENED` : here
-  }
-  // The opened flag has to show on a wrong-location case too: it is what stops
-  // that case going into the put-away file, and without it the screen said
-  // nothing while the warning below counted seven of them.
-  const opened = scan.query_opened ? ' - and OPENED' : ''
-  if (where.length === 0) return `Query has no location for it${opened}`
-  if (where.length === 1) return `Query says ${where[0]}${opened}`
-  return `Query says ${where[0]} and ${where.length - 1} more${opened}`
+
+  const place =
+    scan.result === 'match'
+      ? where.length > 1
+        ? `Here, and in ${where.length - 1} other location${where.length > 2 ? 's' : ''}`
+        : 'Here'
+      : where.length === 0
+        ? 'Query has no location for it'
+        : where.length === 1
+          ? `Query says ${where[0]}`
+          : `Query says ${where[0]} and ${where.length - 1} more`
+
+  // Said on every opened case, wherever Query has it - opening a case moves it,
+  // so the location it reports is a consequence of the opening, not a separate
+  // problem.
+  return scan.query_opened ? `${place} - Query has it as OPENED` : place
 }
 
 /**

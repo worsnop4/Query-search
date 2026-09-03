@@ -396,6 +396,16 @@ Other decisions worth keeping:
 - **`system_locations` is an array.** A case is not always in one place: 381 of
   108,778 full cases (0.35%) sit in more than one location. Any one of them
   matching is a match.
+- **The opened flag decides the bucket, not the location** (`18`). The user's
+  rule: *"we can never meet case right location but open, because every case
+  open will automatic change location."* Opening a case in the WMS moves it, so
+  "right place AND opened" cannot happen — the counter that required it sat
+  permanently at 0 while every opened case hid inside `wrong_location`, and a
+  finished count would read "Opened 0, Wrong location 8" with a put-away
+  warning underneath listing 7 opened cases. `clean_match` is unchanged, so
+  **accuracy and every recorded number stay as they were**; only the split
+  between the opened and wrong-location buckets moves. All opened cases need
+  the same fix — a shortage and a profit — and none can be put away.
 - **Exact match first, contains as a fallback**, and the fallback is accepted
   only when it resolves to exactly one case number. Guessing which case was in
   someone's hand is worse than saying it was not found.

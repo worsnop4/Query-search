@@ -49,33 +49,39 @@ check('lowercase is preserved', readScan('umVRB230001').case_no === 'umVRB230001
 // 16 real case numbers are 3 characters or shorter, one of them just "-".
 check('a 1-character case is still recorded', readScan('-').ok, 'accepted')
 
-console.log('\n--- bucketing: right place is not the same as right ---')
+console.log('\n--- bucketing: the opened flag wins, wherever the case is ---')
 
-// The whole point of correction 1: a case can be exactly where Query says and
-// still be wrong, because Query has it as opened when it is physically full.
 check('right place, Query agrees -> True',
       bucketOf({ result: 'match', query_opened: false }) === 'clean_match',
       bucketOf({ result: 'match', query_opened: false }))
-check('right place, Query says opened -> its own bucket',
-      bucketOf({ result: 'match', query_opened: true }) === 'opened_mismatch',
-      bucketOf({ result: 'match', query_opened: true }))
-check('wrong place passes through',
+check('wrong place, not opened -> wrong location',
       bucketOf({ result: 'wrong_location', query_opened: false }) === 'wrong_location',
       bucketOf({ result: 'wrong_location' }))
 check('not in query passes through',
       bucketOf({ result: 'not_in_query', query_opened: false }) === 'not_in_query',
       bucketOf({ result: 'not_in_query' }))
-// An opened case in the WRONG place is still a wrong-place problem first.
-check('wrong place wins over the opened flag',
-      bucketOf({ result: 'wrong_location', query_opened: true }) === 'wrong_location',
+
+// The user's rule: opening a case in the WMS moves it, so "right place AND
+// opened" cannot happen - and an opened case in the wrong place is opened
+// FIRST, not a put-away problem. Before this, every opened case hid inside
+// wrong_location while the opened counter sat at 0.
+check('wrong place AND opened -> opened',
+      bucketOf({ result: 'wrong_location', query_opened: true }) === 'opened_mismatch',
       bucketOf({ result: 'wrong_location', query_opened: true }))
+check('right place AND opened -> opened too',
+      bucketOf({ result: 'match', query_opened: true }) === 'opened_mismatch',
+      bucketOf({ result: 'match', query_opened: true }))
+check('the label no longer claims a location',
+      RESULTS.opened_mismatch.label === 'Opened in Query', RESULTS.opened_mismatch.label)
 
 console.log('\n--- counting the buckets ---')
 
 const scans = [
   { case_no: 'A', result: 'match', query_opened: false },
   { case_no: 'B', result: 'match', query_opened: false },
-  { case_no: 'C', result: 'match', query_opened: true },
+  // Opened AND in the wrong place, which is what really happens: opening a
+  // case moves it. It counts once, as opened.
+  { case_no: 'C', result: 'wrong_location', query_opened: true },
   { case_no: 'D', result: 'wrong_location', query_opened: false },
   { case_no: 'E', result: 'not_in_query', query_opened: false },
 ]
@@ -148,16 +154,12 @@ check('wrong location names where it should be',
       describeScan({ result: 'wrong_location', system_locations: ['LHO-NN24-301'] }) ===
         'Query says LHO-NN24-301',
       describeScan({ result: 'wrong_location', system_locations: ['LHO-NN24-301'] }))
-// A wrong-location case that is ALSO opened cannot be put away, and the screen
-// said nothing about it while the warning underneath counted seven of them.
-check('a wrong-location case that is also opened says so',
+// An opened case says so wherever Query has it - the location an opened case
+// reports is a consequence of the opening, not a separate problem.
+check('an opened case in the wrong place says it is opened',
       describeScan({ result: 'wrong_location', system_locations: ['X'], query_opened: true })
-        === 'Query says X - and OPENED',
+        === 'Query says X - Query has it as OPENED',
       describeScan({ result: 'wrong_location', system_locations: ['X'], query_opened: true }))
-// The bucket label is only for cases in the RIGHT place - the old wording
-// read as though it covered both and made the counter look wrong.
-check('the opened bucket is named for the right place only',
-      RESULTS.opened_mismatch.label === 'Here but opened', RESULTS.opened_mismatch.label)
 
 console.log('\n--- the adjustment worklist ---')
 

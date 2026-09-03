@@ -692,9 +692,8 @@ function DoneScreen({ sessionId, onNew, onCountAnother, onError }) {
         {noPutaway.length > 0 && (
           <div className="warn ccnoputaway">
             <strong>
-              {nf.format(noPutaway.length)} of the{' '}
-              {nf.format(counts.wrong_location)} wrong-location case
-              {counts.wrong_location === 1 ? '' : 's'} cannot be put away.
+              {nf.format(noPutaway.length)} case
+              {noPutaway.length === 1 ? '' : 's'} cannot be put away.
             </strong>{' '}
             Query has {noPutaway.length === 1 ? 'it' : 'them'} as opened, so the
             quantity is 0 and the WMS rejects a put away. These need a{' '}
@@ -776,15 +775,6 @@ function DoneScreen({ sessionId, onNew, onCountAnother, onError }) {
                       <span className={`pill ${RESULTS[r.bucket].tone}`}>
                         {RESULTS[r.bucket].label}
                       </span>
-                      {/* A wrong-location case that is ALSO opened cannot be
-                          put away, so say it on the row rather than only in
-                          the warning underneath. */}
-                      {r.query_opened && r.bucket === 'wrong_location' && (
-                        <>
-                          {' '}
-                          <span className="pill warn">Opened</span>
-                        </>
-                      )}
                     </td>
                     <td className="small">
                       {describeScan({
