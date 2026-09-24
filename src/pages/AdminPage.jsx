@@ -13,6 +13,7 @@ import { exportInventoryCsv, exportFileName, saveBlob } from '../lib/export'
 import { buildUpdateMessage, whatsappUrl } from '../lib/notify'
 import { writeClipboard } from '../lib/clipboard'
 import { useAuth } from '../lib/AuthContext'
+import { CaseDetailsAdmin } from '../components/CaseDetailsAdmin'
 
 const nf = new Intl.NumberFormat()
 
@@ -737,6 +738,8 @@ export default function AdminPage() {
           who={who}
         />
       ))}
+
+      <CaseDetailsAdmin />
 
       <DownloadCard blockedBy={uploaderOf('inventory')?.display_name ?? null} />
     </div>

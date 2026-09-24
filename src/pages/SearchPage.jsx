@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { toTsv, writeClipboard } from '../lib/clipboard'
 import { readSearch, describeSearch } from '../lib/searchTerms'
+import { CaseDetailModal } from '../components/CaseDetailModal'
 
 const PAGE_SIZE = 100
 
@@ -108,6 +109,7 @@ export default function SearchPage() {
   // the table, the pager and the copy button can never disagree about it.
   const [criteria, setCriteria] = useState(EMPTY_SEARCH)
   const [rows, setRows] = useState([])
+  const [selectedCase, setSelectedCase] = useState(null)
   const [names, setNames] = useState({})
   const [missing, setMissing] = useState([])
   const [total, setTotal] = useState(0)
@@ -655,7 +657,20 @@ export default function SearchPage() {
                           </span>
                         )}
                       </td>
-                      <td className="mono">{r.case_no}</td>
+                      <td className="mono">
+                        {r.case_no ? (
+                          <button
+                            type="button"
+                            className="case-link-btn"
+                            onClick={() => setSelectedCase(r.case_no)}
+                            title={`View details for case ${r.case_no}`}
+                          >
+                            {r.case_no}
+                          </button>
+                        ) : (
+                          <span className="muted">&mdash;</span>
+                        )}
+                      </td>
                       <td>{r.location}</td>
                       <td>{r.zone_type}</td>
                       <td className="num">{nf.format(Number(r.quantity) || 0)}</td>
@@ -686,6 +701,13 @@ export default function SearchPage() {
             </div>
           )}
         </>
+      )}
+
+      {selectedCase && (
+        <CaseDetailModal
+          caseNo={selectedCase}
+          onClose={() => setSelectedCase(null)}
+        />
       )}
     </>
   )

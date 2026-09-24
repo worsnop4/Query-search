@@ -29,6 +29,7 @@ real data and is not obvious from the code.
 | Dashboard | **Not started** |
 | Breakdown pivot | **Built** — `/breakdown`, admin only. Zipped `.xlsx`, 1.6 MB, no new SQL |
 | Transit monitoring | **Built** — `/transit`, admin only. Needs `17_part_type_and_transit.sql` **and a PFEP re-upload** for Part Type |
+| Case tracking (SA, Destination, Unpack) | **Built** — Clickable case in search results, dual upload & retention cleanup on `/admin`, needs `19_case_details.sql` |
 
 Repo: `https://github.com/worsnop4/Query-search.git` (private)
 Supabase project URL: `https://smjzdmcaojaumdtrqdpg.supabase.co`
@@ -963,3 +964,25 @@ new file shape appears.
   thresholds (LOC 200, OW SAIC 500). The `breakdown` view in `setup.sql` already
   computes the pivot and subtotals; Status/GAP are deliberately left to the app
   so the thresholds stay editable. Resolve question 4 first.
+
+---
+
+## Case tracking details (Shipping Advice, Destination, Unpack)
+
+Built Sep 2026. Allows clicking any Case Number in search results to immediately inspect:
+- Shipping Advice
+- Container Code (`cont_no`)
+- Unload Destination
+- Unpack Number (`NO UNPACK`, e.g. `OK-KIRIM` or custom team code)
+- Team No (ready for when unpacklabel has team column)
+
+### Architecture
+- **Table**: `public.case_details` (`case_no` primary key, `shipping_advice`, `container_code`, `unload_destination`, `unpack_number`, `team_no`, `sa_updated_at`, `unpack_updated_at`, `updated_at`).
+- **Two files uploaded on `/admin`**:
+  1. `sa and destination.xlsx` (Shipping Advice, cont_no, Case Number, Unload destination) -> upserted via `upsert_case_shipping_batch(p_rows jsonb)` in chunks of 2,000.
+  2. `unpacklabel.xlsx` (PDAID / Case Number, NO UNPACK, Team) -> upserted via `upsert_case_unpack_batch(p_rows jsonb)` in chunks of 2,000.
+- **UPSERT preserves fields**: Uploading SA preserves existing unpack numbers; uploading unpack preserves existing SA & container info.
+- **Storage retention**: Admin can clean up records older than 30, 60, 90, 180 days or a custom cutoff date via `delete_case_details_before(cutoff)`.
+- **Search Page**: `case_no` in the search table is a clickable link opening `CaseDetailModal`.
+- **Migration**: `supabase/19_case_details.sql`.
+
