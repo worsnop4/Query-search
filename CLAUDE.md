@@ -967,22 +967,29 @@ new file shape appears.
 
 ---
 
-## Case tracking details (Shipping Advice, Destination, Unpack)
+## Case tracking details (Case & Container, Container & Destination)
 
-Built Sep 2026. Allows clicking any Case Number in search results to immediately inspect:
-- Shipping Advice
-- Container Code (`cont_no`)
-- Unload Destination
-- Unpack Number (`NO UNPACK`, e.g. `OK-KIRIM` or custom team code)
-- Team No (ready for when unpacklabel has team column)
+Updated Sep 2026. Unpack tracking removed in favor of direct Container and Unload Destination tracking.
+Features:
+- Clicking any Case Number in search results opens a compact mini-popup displaying:
+  - Container Code
+  - Unload Destination
+  - Time Unload (`inbound_time` from Query inventory)
+- When a case has location `TRANSIT`, the search results table displays its Unload Destination badge directly beside `TRANSIT` in the Location column.
 
 ### Architecture
-- **Table**: `public.case_details` (`case_no` primary key, `shipping_advice`, `container_code`, `unload_destination`, `unpack_number`, `team_no`, `sa_updated_at`, `unpack_updated_at`, `updated_at`).
+- **Tables**:
+  - `public.case_containers` (`case_no` PRIMARY KEY, `container_code`, `updated_at`).
+  - `public.container_destinations` (`container_code` PRIMARY KEY, `unload_destination`, `updated_at`).
+  - `public.case_details`: View joining `case_containers` and `container_destinations`.
 - **Two files uploaded on `/admin`**:
-  1. `sa and destination.xlsx` (Shipping Advice, cont_no, Case Number, Unload destination) -> upserted via `upsert_case_shipping_batch(p_rows jsonb)` in chunks of 2,000.
-  2. `unpacklabel.xlsx` (PDAID / Case Number, NO UNPACK, Team) -> upserted via `upsert_case_unpack_batch(p_rows jsonb)` in chunks of 2,000.
-- **UPSERT preserves fields**: Uploading SA preserves existing unpack numbers; uploading unpack preserves existing SA & container info.
+  1. `Case cont.xlsx` (Case, Container) -> upserted via `upsert_case_containers_batch(p_rows jsonb)` in chunks of 2,000.
+  2. `cont dest.xlsx` (NO CONT, Deatination / Destination) -> upserted via `upsert_container_destinations_batch(p_rows jsonb)` in chunks of 2,000.
+- **Relational join**: Uploading `cont dest.xlsx` immediately associates destination for all cases mapped to that container.
 - **Storage retention**: Admin can clean up records older than 30, 60, 90, 180 days or a custom cutoff date via `delete_case_details_before(cutoff)`.
-- **Search Page**: `case_no` in the search table is a clickable link opening `CaseDetailModal`.
+- **Search Page**:
+  - `case_no` in the search table opens the compact `CaseDetailModal`.
+  - Batch lookup `fetchCaseDestinationsBatch(cases)` renders the `transit-dest-badge` next to `TRANSIT`.
 - **Migration**: `supabase/19_case_details.sql`.
+
 

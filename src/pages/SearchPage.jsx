@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { toTsv, writeClipboard } from '../lib/clipboard'
 import { readSearch, describeSearch } from '../lib/searchTerms'
 import { CaseDetailModal } from '../components/CaseDetailModal'
+import { fetchCaseDestinationsBatch } from '../lib/caseDetails'
 
 const PAGE_SIZE = 100
 
@@ -111,6 +112,7 @@ export default function SearchPage() {
   const [rows, setRows] = useState([])
   const [selectedCase, setSelectedCase] = useState(null)
   const [names, setNames] = useState({})
+  const [caseDestinations, setCaseDestinations] = useState({})
   const [missing, setMissing] = useState([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(0)
@@ -185,12 +187,28 @@ export default function SearchPage() {
       criteria,
       filter,
       zoneList,
-      'part_number, case_no, location, zone_type, quantity, is_case_opened',
+      'part_number, case_no, location, zone_type, quantity, is_case_opened, inbound_time',
       { count: 'exact' }
     ).range(from, from + PAGE_SIZE - 1)
 
     if (err) throw err
     return { data: data ?? [], count: count ?? 0 }
+  }
+
+  async function lookupDestinations(rowList) {
+    if (!rowList || rowList.length === 0) return
+    const caseNumbers = rowList
+      .map((r) => r.case_no)
+      .filter((c) => c && String(c).trim() !== '')
+    if (caseNumbers.length === 0) return
+    try {
+      const destMap = await fetchCaseDestinationsBatch(caseNumbers)
+      if (destMap && Object.keys(destMap).length > 0) {
+        setCaseDestinations((prev) => ({ ...prev, ...destMap }))
+      }
+    } catch {
+      // Non-blocking background enhancement
+    }
   }
 
   // An exact search knows its part numbers up front. A partial one does not -
@@ -286,6 +304,7 @@ export default function SearchPage() {
       if (reqRef.current === reqId) {
         setRows(first.data)
         setTotal(first.count)
+        lookupDestinations(first.data)
       }
 
       if (criteria.part.mode !== 'exact') {
@@ -362,6 +381,7 @@ export default function SearchPage() {
       setRows(data)
       setTotal(count)
       setPage(pageIndex)
+      lookupDestinations(data)
 
       // A partial or case-only search discovers its part numbers, so page 2
       // may hold parts page 1 never mentioned. Merge rather than replace -
@@ -414,6 +434,7 @@ export default function SearchPage() {
     setCriteria(EMPTY_SEARCH)
     setRows([])
     setNames({})
+    setCaseDestinations({})
     setMissing([])
     setTotal(0)
     setPage(0)
@@ -662,7 +683,12 @@ export default function SearchPage() {
                           <button
                             type="button"
                             className="case-link-btn"
-                            onClick={() => setSelectedCase(r.case_no)}
+                            onClick={() =>
+                              setSelectedCase({
+                                caseNo: r.case_no,
+                                inboundTime: r.inbound_time,
+                              })
+                            }
                             title={`View details for case ${r.case_no}`}
                           >
                             {r.case_no}
@@ -671,7 +697,23 @@ export default function SearchPage() {
                           <span className="muted">&mdash;</span>
                         )}
                       </td>
-                      <td>{r.location}</td>
+                      <td>
+                        <span>{r.location}</span>
+                        {r.location === 'TRANSIT' &&
+                          caseDestinations[r.case_no?.trim()?.toUpperCase()]
+                            ?.unload_destination && (
+                            <span
+                              className="transit-dest-badge"
+                              title={`Unload Destination: ${caseDestinations[r.case_no.trim().toUpperCase()].unload_destination}`}
+                            >
+                              {
+                                caseDestinations[
+                                  r.case_no.trim().toUpperCase()
+                                ].unload_destination
+                              }
+                            </span>
+                          )}
+                      </td>
                       <td>{r.zone_type}</td>
                       <td className="num">{nf.format(Number(r.quantity) || 0)}</td>
                     </tr>
@@ -705,7 +747,8 @@ export default function SearchPage() {
 
       {selectedCase && (
         <CaseDetailModal
-          caseNo={selectedCase}
+          caseNo={selectedCase.caseNo}
+          inboundTime={selectedCase.inboundTime}
           onClose={() => setSelectedCase(null)}
         />
       )}

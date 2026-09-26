@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { fetchCaseDetail } from '../lib/caseDetails.js'
+import { supabase } from '../lib/supabase.js'
 
-export function CaseDetailModal({ caseNo, onClose }) {
+export function CaseDetailModal({ caseNo, inboundTime, onClose }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
+  const [unloadTime, setUnloadTime] = useState(inboundTime ?? null)
 
   useEffect(() => {
     if (!caseNo) return
@@ -13,6 +15,24 @@ export function CaseDetailModal({ caseNo, onClose }) {
     let cancelled = false
     setLoading(true)
     setError(null)
+
+    // If inboundTime was not passed from search row, query it from inventory
+    if (!inboundTime) {
+      supabase
+        .from('inventory')
+        .select('inbound_time')
+        .eq('case_no', caseNo)
+        .limit(1)
+        .maybeSingle()
+        .then(({ data: inv }) => {
+          if (!cancelled && inv?.inbound_time) {
+            setUnloadTime(inv.inbound_time)
+          }
+        })
+        .catch(() => {})
+    } else {
+      setUnloadTime(inboundTime)
+    }
 
     fetchCaseDetail(caseNo)
       .then((res) => {
@@ -31,7 +51,7 @@ export function CaseDetailModal({ caseNo, onClose }) {
     return () => {
       cancelled = true
     }
-  }, [caseNo])
+  }, [caseNo, inboundTime])
 
   useEffect(() => {
     function handleKeyDown(e) {
@@ -51,10 +71,11 @@ export function CaseDetailModal({ caseNo, onClose }) {
     })
   }
 
-  function formatDate(d) {
-    if (!d) return '-'
+  function formatTime(d) {
+    if (!d) return null
     try {
       const dt = new Date(d)
+      if (Number.isNaN(dt.getTime())) return String(d)
       return dt.toLocaleString('en-GB', {
         day: '2-digit',
         month: 'short',
@@ -77,13 +98,14 @@ export function CaseDetailModal({ caseNo, onClose }) {
         if (e.target === e.currentTarget) onClose?.()
       }}
     >
-      <div className="case-modal">
-        <div className="case-modal-header">
-          <div className="case-modal-title-wrap">
-            <span className="case-modal-badge">Case Tracking</span>
-            <h2 id="case-modal-title" className="case-modal-title">
+      <div className="case-mini-popup">
+        {/* Header */}
+        <div className="case-popup-header">
+          <div className="case-popup-title-wrap">
+            <span className="case-popup-tag">Case Details</span>
+            <h3 id="case-modal-title" className="case-popup-title">
               {caseNo}
-            </h2>
+            </h3>
             <button
               type="button"
               className="case-copy-btn"
@@ -103,126 +125,70 @@ export function CaseDetailModal({ caseNo, onClose }) {
           </button>
         </div>
 
-        <div className="case-modal-body">
+        {/* Body */}
+        <div className="case-popup-body">
           {loading && (
-            <div className="case-modal-state">
-              <div className="case-spinner" />
-              <p>Looking up case details...</p>
+            <div className="case-popup-loading">
+              <div className="case-spinner-sm" />
+              <span>Looking up details...</span>
             </div>
           )}
 
           {error && (
-            <div className="case-modal-error">
-              <p>Error: {error}</p>
+            <div className="case-popup-error">
+              <span>{error}</span>
             </div>
           )}
 
-          {!loading && !error && !data && (
-            <div className="case-modal-empty">
-              <div className="empty-icon">📦</div>
-              <h3>No Case Details Found</h3>
-              <p>
-                No Shipping Advice or Unpack details have been uploaded for case{' '}
-                <strong>{caseNo}</strong> yet.
-              </p>
-              <p className="case-modal-subhint">
-                Admins can upload <code>sa and destination.xlsx</code> and{' '}
-                <code>unpacklabel.xlsx</code> from the Admin page.
-              </p>
-            </div>
-          )}
-
-          {!loading && !error && data && (
-            <div className="case-details-grid">
-              {/* Section 1: Logistics & Shipping */}
-              <div className="case-detail-card">
-                <div className="card-header">
-                  <span className="card-icon">🚢</span>
-                  <h4>Shipping & Logistics</h4>
-                </div>
-                <div className="field-list">
-                  <div className="field-row">
-                    <span className="field-label">Shipping Advice</span>
-                    <span className="field-value">
-                      {data.shipping_advice || (
-                        <span className="muted-dash">-</span>
-                      )}
-                    </span>
-                  </div>
-                  <div className="field-row">
-                    <span className="field-label">Container Code</span>
-                    <span className="field-value font-mono">
-                      {data.container_code || (
-                        <span className="muted-dash">-</span>
-                      )}
-                    </span>
-                  </div>
-                  <div className="field-row">
-                    <span className="field-label">Unload Destination</span>
-                    <span className="field-value">
-                      {data.unload_destination ? (
-                        <span className="dest-tag">
-                          {data.unload_destination}
-                        </span>
-                      ) : (
-                        <span className="muted-dash">-</span>
-                      )}
-                    </span>
-                  </div>
-                  <div className="field-row footer-row">
-                    <span className="field-label">Last SA Update</span>
-                    <span className="field-value small">
-                      {formatDate(data.sa_updated_at)}
-                    </span>
-                  </div>
-                </div>
+          {!loading && !error && (
+            <div className="case-popup-rows">
+              {/* Row 1: Container */}
+              <div className="case-popup-item">
+                <span className="case-popup-label">
+                  <span className="case-item-icon">🚢</span> Container
+                </span>
+                <span className="case-popup-value font-mono">
+                  {data?.container_code ? (
+                    <strong>{data.container_code}</strong>
+                  ) : (
+                    <span className="muted-dash">—</span>
+                  )}
+                </span>
               </div>
 
-              {/* Section 2: Unpack & Team */}
-              <div className="case-detail-card">
-                <div className="card-header">
-                  <span className="card-icon">🏷️</span>
-                  <h4>Unpack & Team Label</h4>
-                </div>
-                <div className="field-list">
-                  <div className="field-row">
-                    <span className="field-label">Unpack Number</span>
-                    <span className="field-value">
-                      {data.unpack_number ? (
-                        <span className="unpack-tag">
-                          {data.unpack_number}
-                        </span>
-                      ) : (
-                        <span className="muted-dash">-</span>
-                      )}
+              {/* Row 2: Unload Destination */}
+              <div className="case-popup-item">
+                <span className="case-popup-label">
+                  <span className="case-item-icon">📍</span> Unload Destination
+                </span>
+                <span className="case-popup-value">
+                  {data?.unload_destination ? (
+                    <span className="case-dest-pill">
+                      {data.unload_destination}
                     </span>
-                  </div>
-                  <div className="field-row">
-                    <span className="field-label">Team No</span>
-                    <span className="field-value">
-                      {data.team_no ? (
-                        <span className="team-tag">{data.team_no}</span>
-                      ) : (
-                        <span className="muted-dash">-</span>
-                      )}
+                  ) : (
+                    <span className="muted-dash">—</span>
+                  )}
+                </span>
+              </div>
+
+              {/* Row 3: Time Unload (inbound_time) */}
+              <div className="case-popup-item">
+                <span className="case-popup-label">
+                  <span className="case-item-icon">⏱️</span> Time Unload
+                </span>
+                <span className="case-popup-value">
+                  {unloadTime ? (
+                    <span className="case-time-text">
+                      {formatTime(unloadTime)}
                     </span>
-                  </div>
-                  <div className="field-row footer-row">
-                    <span className="field-label">Last Unpack Update</span>
-                    <span className="field-value small">
-                      {formatDate(data.unpack_updated_at)}
-                    </span>
-                  </div>
-                </div>
+                  ) : (
+                    <span className="muted-dash">—</span>
+                  )}
+                </span>
               </div>
             </div>
           )}
-        </div>
-
-        <div className="case-modal-footer">
-          <button type="button" className="btn secondary" onClick={onClose}>
-            Close
-          </button>
         </div>
       </div>
     </div>

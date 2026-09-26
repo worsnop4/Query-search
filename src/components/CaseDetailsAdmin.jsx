@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  parseShippingAdviceWorkbook,
-  parseUnpackLabelWorkbook,
-  uploadCaseShipping,
-  uploadCaseUnpack,
+  parseCaseContainerWorkbook,
+  parseContainerDestinationWorkbook,
+  uploadCaseContainers,
+  uploadContainerDestinations,
   fetchCaseDetailsStats,
   deleteCaseDetailsBefore,
 } from '../lib/caseDetails.js'
@@ -11,31 +11,32 @@ import {
 export function CaseDetailsAdmin() {
   // Stats state
   const [stats, setStats] = useState({
-    total_count: 0,
+    case_count: 0,
+    container_count: 0,
     oldest_date: null,
     newest_date: null,
   })
   const [loadingStats, setLoadingStats] = useState(false)
 
-  // Shipping file state
-  const [saFile, setSaFile] = useState(null)
-  const [saParsed, setSaParsed] = useState(null)
-  const [saBusy, setSaBusy] = useState(false)
-  const [saProgress, setSaProgress] = useState(null)
-  const [saError, setSaError] = useState(null)
-  const [saSuccess, setSaSuccess] = useState(null)
-  const saInputRef = useRef(null)
-  const saCancelRef = useRef(false)
+  // Case & Container file state
+  const [caseFile, setCaseFile] = useState(null)
+  const [caseParsed, setCaseParsed] = useState(null)
+  const [caseBusy, setCaseBusy] = useState(false)
+  const [caseProgress, setCaseProgress] = useState(null)
+  const [caseError, setCaseError] = useState(null)
+  const [caseSuccess, setCaseSuccess] = useState(null)
+  const caseInputRef = useRef(null)
+  const caseCancelRef = useRef(false)
 
-  // Unpack file state
-  const [unpackFile, setUnpackFile] = useState(null)
-  const [unpackParsed, setUnpackParsed] = useState(null)
-  const [unpackBusy, setUnpackBusy] = useState(false)
-  const [unpackProgress, setUnpackProgress] = useState(null)
-  const [unpackError, setUnpackError] = useState(null)
-  const [unpackSuccess, setUnpackSuccess] = useState(null)
-  const unpackInputRef = useRef(null)
-  const unpackCancelRef = useRef(false)
+  // Container & Destination file state
+  const [destFile, setDestFile] = useState(null)
+  const [destParsed, setDestParsed] = useState(null)
+  const [destBusy, setDestBusy] = useState(false)
+  const [destProgress, setDestProgress] = useState(null)
+  const [destError, setDestError] = useState(null)
+  const [destSuccess, setDestSuccess] = useState(null)
+  const destInputRef = useRef(null)
+  const destCancelRef = useRef(false)
 
   // Cleanup state
   const [cleanupDays, setCleanupDays] = useState('60')
@@ -57,101 +58,101 @@ export function CaseDetailsAdmin() {
     refreshStats()
   }, [])
 
-  // ------------------------------------------------------------- Shipping Handlers
-  async function onPickSa(e) {
+  // ------------------------------------------------------------- 1. Case & Container Handlers
+  async function onPickCase(e) {
     const file = e.target.files?.[0]
-    setSaError(null)
-    setSaSuccess(null)
-    setSaParsed(null)
+    setCaseError(null)
+    setCaseSuccess(null)
+    setCaseParsed(null)
     if (!file) return
 
-    setSaFile(file)
-    setSaBusy(true)
+    setCaseFile(file)
+    setCaseBusy(true)
     try {
       const buf = await file.arrayBuffer()
-      const rows = parseShippingAdviceWorkbook(buf)
-      setSaParsed(rows)
+      const rows = parseCaseContainerWorkbook(buf)
+      setCaseParsed(rows)
     } catch (err) {
-      setSaError(err.message ?? 'Failed to read file')
-      setSaFile(null)
-      if (saInputRef.current) saInputRef.current.value = ''
+      setCaseError(err.message ?? 'Failed to read file')
+      setCaseFile(null)
+      if (caseInputRef.current) caseInputRef.current.value = ''
     } finally {
-      setSaBusy(false)
+      setCaseBusy(false)
     }
   }
 
-  async function doUploadSa() {
-    if (!saParsed || saParsed.length === 0) return
-    setSaBusy(true)
-    setSaError(null)
-    setSaSuccess(null)
-    saCancelRef.current = false
+  async function doUploadCase() {
+    if (!caseParsed || caseParsed.length === 0) return
+    setCaseBusy(true)
+    setCaseError(null)
+    setCaseSuccess(null)
+    caseCancelRef.current = false
 
     try {
-      const res = await uploadCaseShipping({
-        rows: saParsed,
-        onProgress: setSaProgress,
-        shouldCancel: () => saCancelRef.current,
+      const res = await uploadCaseContainers({
+        rows: caseParsed,
+        onProgress: setCaseProgress,
+        shouldCancel: () => caseCancelRef.current,
       })
-      setSaSuccess(`Successfully uploaded ${res.total.toLocaleString()} shipping records.`)
-      setSaParsed(null)
-      setSaFile(null)
-      if (saInputRef.current) saInputRef.current.value = ''
+      setCaseSuccess(`Successfully saved ${res.total.toLocaleString()} case-to-container records.`)
+      setCaseParsed(null)
+      setCaseFile(null)
+      if (caseInputRef.current) caseInputRef.current.value = ''
       refreshStats()
     } catch (err) {
-      setSaError(err.message ?? 'Upload failed')
+      setCaseError(err.message ?? 'Upload failed')
     } finally {
-      setSaBusy(false)
-      setSaProgress(null)
+      setCaseBusy(false)
+      setCaseProgress(null)
     }
   }
 
-  // ------------------------------------------------------------- Unpack Handlers
-  async function onPickUnpack(e) {
+  // ------------------------------------------------------------- 2. Container & Destination Handlers
+  async function onPickDest(e) {
     const file = e.target.files?.[0]
-    setUnpackError(null)
-    setUnpackSuccess(null)
-    setUnpackParsed(null)
+    setDestError(null)
+    setDestSuccess(null)
+    setDestParsed(null)
     if (!file) return
 
-    setUnpackFile(file)
-    setUnpackBusy(true)
+    setDestFile(file)
+    setDestBusy(true)
     try {
       const buf = await file.arrayBuffer()
-      const rows = parseUnpackLabelWorkbook(buf)
-      setUnpackParsed(rows)
+      const rows = parseContainerDestinationWorkbook(buf)
+      setDestParsed(rows)
     } catch (err) {
-      setUnpackError(err.message ?? 'Failed to read file')
-      setUnpackFile(null)
-      if (unpackInputRef.current) unpackInputRef.current.value = ''
+      setDestError(err.message ?? 'Failed to read file')
+      setDestFile(null)
+      if (destInputRef.current) destInputRef.current.value = ''
     } finally {
-      setUnpackBusy(false)
+      setDestBusy(false)
     }
   }
 
-  async function doUploadUnpack() {
-    if (!unpackParsed || unpackParsed.length === 0) return
-    setUnpackBusy(true)
-    setUnpackError(null)
-    setUnpackSuccess(null)
-    unpackCancelRef.current = false
+  async function doUploadDest() {
+    if (!destParsed || destParsed.length === 0) return
+    setDestBusy(true)
+    setDestError(null)
+    setDestSuccess(null)
+    destCancelRef.current = false
 
     try {
-      const res = await uploadCaseUnpack({
-        rows: unpackParsed,
-        onProgress: setUnpackProgress,
-        shouldCancel: () => unpackCancelRef.current,
+      const res = await uploadContainerDestinations({
+        rows: destParsed,
+        onProgress: setDestProgress,
+        shouldCancel: () => destCancelRef.current,
       })
-      setUnpackSuccess(`Successfully uploaded ${res.total.toLocaleString()} unpack labels.`)
-      setUnpackParsed(null)
-      setUnpackFile(null)
-      if (unpackInputRef.current) unpackInputRef.current.value = ''
+      setDestSuccess(`Successfully saved ${res.total.toLocaleString()} container destination records.`)
+      setDestParsed(null)
+      setDestFile(null)
+      if (destInputRef.current) destInputRef.current.value = ''
       refreshStats()
     } catch (err) {
-      setUnpackError(err.message ?? 'Upload failed')
+      setDestError(err.message ?? 'Upload failed')
     } finally {
-      setUnpackBusy(false)
-      setUnpackProgress(null)
+      setDestBusy(false)
+      setDestProgress(null)
     }
   }
 
@@ -174,7 +175,7 @@ export function CaseDetailsAdmin() {
       }
 
       const count = await deleteCaseDetailsBefore(cutoffIso)
-      setCleanupResult(`Deleted ${count.toLocaleString()} old case records.`)
+      setCleanupResult(`Deleted ${count.toLocaleString()} old records.`)
       setConfirmingCleanup(false)
       refreshStats()
     } catch (err) {
@@ -197,67 +198,76 @@ export function CaseDetailsAdmin() {
     }
   }
 
+  const totalRecords = Number(stats.case_count || 0) + Number(stats.container_count || 0)
+
   return (
     <section className="case-admin-section">
       <div className="case-admin-header">
         <div>
-          <h2>Case Tracking Details</h2>
+          <h2>Case Tracking &amp; Container Details</h2>
           <p className="muted small">
-            Upload shipping advice &amp; unpack labels. Case numbers are matched
-            automatically and become clickable in the search results.
+            Upload Case-to-Container and Container-to-Destination templates. Cases become
+            clickable in search results, showing container, unload destination, and unload time.
           </p>
         </div>
-        <div className="case-stats-badge">
-          <span className="count">
-            {loadingStats ? '...' : Number(stats.total_count).toLocaleString()}
-          </span>
-          <span className="label">Cases in Database</span>
+        <div className="case-stats-summary-wrap">
+          <div className="case-stats-badge">
+            <span className="count">
+              {loadingStats ? '...' : Number(stats.case_count || 0).toLocaleString()}
+            </span>
+            <span className="label">Cases Mapped</span>
+          </div>
+          <div className="case-stats-badge secondary">
+            <span className="count">
+              {loadingStats ? '...' : Number(stats.container_count || 0).toLocaleString()}
+            </span>
+            <span className="label">Containers</span>
+          </div>
         </div>
       </div>
 
       <div className="case-upload-grid">
-        {/* Upload 1: SA & Destination */}
+        {/* Upload 1: Case & Container */}
         <div className="case-upload-card">
           <div className="card-top">
-            <span className="badge-type">Shipping Advice</span>
-            <h3>1. SA &amp; Destination</h3>
+            <span className="badge-type">Template 1</span>
+            <h3>1. Case &amp; Container</h3>
             <p className="muted small">
-              Upload <code>sa and destination.xlsx</code> (Shipping Advice,
-              Container Code, Case Number, Destination).
+              Upload <code>Case cont.xlsx</code> (Case Number &amp; Container Code).
             </p>
           </div>
 
           <div className="file-box">
             <input
-              ref={saInputRef}
+              ref={caseInputRef}
               type="file"
               accept=".xlsx,.xls"
-              onChange={onPickSa}
-              disabled={saBusy}
+              onChange={onPickCase}
+              disabled={caseBusy}
             />
-            {saParsed && (
+            {caseParsed && (
               <div className="preview-stat">
-                ✓ Ready: <strong>{saParsed.length.toLocaleString()}</strong>{' '}
-                cases parsed from <em>{saFile?.name}</em>
+                ✓ Ready: <strong>{caseParsed.length.toLocaleString()}</strong>{' '}
+                cases parsed from <em>{caseFile?.name}</em>
               </div>
             )}
           </div>
 
-          {saError && <div className="card-msg error">{saError}</div>}
-          {saSuccess && <div className="card-msg success">{saSuccess}</div>}
+          {caseError && <div className="card-msg error">{caseError}</div>}
+          {caseSuccess && <div className="card-msg success">{caseSuccess}</div>}
 
-          {saProgress && (
+          {caseProgress && (
             <div className="upload-progress-bar">
               <div
                 className="progress-fill"
                 style={{
-                  width: `${Math.round((saProgress.done / saProgress.total) * 100)}%`,
+                  width: `${Math.round((caseProgress.done / caseProgress.total) * 100)}%`,
                 }}
               />
               <span className="progress-text">
-                {saProgress.done.toLocaleString()} /{' '}
-                {saProgress.total.toLocaleString()} rows (
-                {Math.round((saProgress.done / saProgress.total) * 100)}%)
+                {caseProgress.done.toLocaleString()} /{' '}
+                {caseProgress.total.toLocaleString()} rows (
+                {Math.round((caseProgress.done / caseProgress.total) * 100)}%)
               </span>
             </div>
           )}
@@ -266,17 +276,17 @@ export function CaseDetailsAdmin() {
             <button
               type="button"
               className="btn"
-              disabled={!saParsed || saBusy}
-              onClick={doUploadSa}
+              disabled={!caseParsed || caseBusy}
+              onClick={doUploadCase}
             >
-              {saBusy ? 'Uploading...' : 'Save & Merge Shipping Data'}
+              {caseBusy ? 'Uploading...' : 'Save Case & Container Mapping'}
             </button>
-            {saBusy && (
+            {caseBusy && (
               <button
                 type="button"
                 className="ghost small"
                 onClick={() => {
-                  saCancelRef.current = true
+                  caseCancelRef.current = true
                 }}
               >
                 Cancel
@@ -285,51 +295,47 @@ export function CaseDetailsAdmin() {
           </div>
         </div>
 
-        {/* Upload 2: Unpack Label */}
+        {/* Upload 2: Container & Destination */}
         <div className="case-upload-card">
           <div className="card-top">
-            <span className="badge-type secondary">Unpack Label</span>
-            <h3>2. Unpack Label</h3>
+            <span className="badge-type secondary">Template 2</span>
+            <h3>2. Container &amp; Destination</h3>
             <p className="muted small">
-              Upload <code>unpacklabel.xlsx</code> (PDAID / Case Number, Unpack
-              Number, Team).
+              Upload <code>cont dest.xlsx</code> (Container Code &amp; Unload Destination).
             </p>
           </div>
 
           <div className="file-box">
             <input
-              ref={unpackInputRef}
+              ref={destInputRef}
               type="file"
               accept=".xlsx,.xls"
-              onChange={onPickUnpack}
-              disabled={unpackBusy}
+              onChange={onPickDest}
+              disabled={destBusy}
             />
-            {unpackParsed && (
+            {destParsed && (
               <div className="preview-stat">
-                ✓ Ready: <strong>{unpackParsed.length.toLocaleString()}</strong>{' '}
-                unpack rows parsed from <em>{unpackFile?.name}</em>
+                ✓ Ready: <strong>{destParsed.length.toLocaleString()}</strong>{' '}
+                containers parsed from <em>{destFile?.name}</em>
               </div>
             )}
           </div>
 
-          {unpackError && <div className="card-msg error">{unpackError}</div>}
-          {unpackSuccess && (
-            <div className="card-msg success">{unpackSuccess}</div>
-          )}
+          {destError && <div className="card-msg error">{destError}</div>}
+          {destSuccess && <div className="card-msg success">{destSuccess}</div>}
 
-          {unpackProgress && (
+          {destProgress && (
             <div className="upload-progress-bar">
               <div
                 className="progress-fill"
                 style={{
-                  width: `${Math.round((unpackProgress.done / unpackProgress.total) * 100)}%`,
+                  width: `${Math.round((destProgress.done / destProgress.total) * 100)}%`,
                 }}
               />
               <span className="progress-text">
-                {unpackProgress.done.toLocaleString()} /{' '}
-                {unpackProgress.total.toLocaleString()} rows (
-                {Math.round((unpackProgress.done / unpackProgress.total) * 100)}
-                %)
+                {destProgress.done.toLocaleString()} /{' '}
+                {destProgress.total.toLocaleString()} containers (
+                {Math.round((destProgress.done / destProgress.total) * 100)}%)
               </span>
             </div>
           )}
@@ -338,17 +344,17 @@ export function CaseDetailsAdmin() {
             <button
               type="button"
               className="btn"
-              disabled={!unpackParsed || unpackBusy}
-              onClick={doUploadUnpack}
+              disabled={!destParsed || destBusy}
+              onClick={doUploadDest}
             >
-              {unpackBusy ? 'Uploading...' : 'Save & Merge Unpack Data'}
+              {destBusy ? 'Uploading...' : 'Save Container Destination'}
             </button>
-            {unpackBusy && (
+            {destBusy && (
               <button
                 type="button"
                 className="ghost small"
                 onClick={() => {
-                  unpackCancelRef.current = true
+                  destCancelRef.current = true
                 }}
               >
                 Cancel
@@ -364,7 +370,7 @@ export function CaseDetailsAdmin() {
           <div>
             <h4>Storage Retention &amp; Cleanup</h4>
             <p className="muted small">
-              Clean up older case records to avoid filling database storage.
+              Clean up older records to keep database storage lean.
               Records date back from{' '}
               <strong>{formatDate(stats.oldest_date)}</strong> to{' '}
               <strong>{formatDate(stats.newest_date)}</strong>.
@@ -402,7 +408,7 @@ export function CaseDetailsAdmin() {
               <button
                 type="button"
                 className="btn danger small"
-                disabled={cleaningUp || stats.total_count === 0}
+                disabled={cleaningUp || totalRecords === 0}
                 onClick={() => setConfirmingCleanup(true)}
               >
                 Clean Up Old Data
