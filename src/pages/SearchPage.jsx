@@ -256,7 +256,40 @@ export default function SearchPage() {
         setCopyDone(all.length)
       }
 
-      await writeClipboard(toTsv(COPY_HEADERS, all, COPY_COLUMNS))
+      // For any cases sitting at TRANSIT, include their unload destination
+      let allDestinations = { ...caseDestinations }
+      const transitCases = all
+        .filter((r) => r.location?.trim()?.toUpperCase() === 'TRANSIT' && r.case_no)
+        .map((r) => r.case_no)
+
+      const unknownTransitCases = transitCases.filter(
+        (c) => !allDestinations[String(c).trim().toUpperCase()]
+      )
+
+      if (unknownTransitCases.length > 0) {
+        try {
+          const fetched = await fetchCaseDestinationsBatch(unknownTransitCases)
+          allDestinations = { ...allDestinations, ...fetched }
+          setCaseDestinations((prev) => ({ ...prev, ...fetched }))
+        } catch {
+          // If destination lookup fails, continue copying with plain TRANSIT
+        }
+      }
+
+      const rowsToCopy = all.map((r) => {
+        if (r.location?.trim()?.toUpperCase() === 'TRANSIT' && r.case_no) {
+          const dest = allDestinations[r.case_no.trim().toUpperCase()]?.unload_destination
+          if (dest) {
+            return {
+              ...r,
+              location: `TRANSIT (${dest})`,
+            }
+          }
+        }
+        return r
+      })
+
+      await writeClipboard(toTsv(COPY_HEADERS, rowsToCopy, COPY_COLUMNS))
       setCopyState('copied')
     } catch (err) {
       setCopyError(err.message ?? String(err))
