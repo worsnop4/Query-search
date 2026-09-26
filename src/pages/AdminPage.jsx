@@ -12,6 +12,7 @@ import { useAdminPresence, listNames } from '../lib/useAdminPresence'
 import { exportInventoryCsv, exportFileName, saveBlob } from '../lib/export'
 import { buildUpdateMessage, whatsappUrl } from '../lib/notify'
 import { writeClipboard } from '../lib/clipboard'
+import { useAuth } from '../lib/AuthContext'
 import { CaseDetailsAdmin } from '../components/CaseDetailsAdmin'
 import { SaUnpackAdmin } from '../components/SaUnpackAdmin'
 
