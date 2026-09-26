@@ -26,6 +26,7 @@ const CycleCountPage = lazy(() => import('./pages/CycleCountPage'))
 const BreakdownPage = lazy(() => import('./pages/BreakdownPage'))
 
 const TransitPage = lazy(() => import('./pages/TransitPage'))
+const SaUnpackPage = lazy(() => import('./pages/SaUnpackPage'))
 
 const nf = new Intl.NumberFormat()
 
@@ -67,6 +68,7 @@ function TopBar() {
   const sessionId = useSessionId()
   const onAdmin = location.pathname.startsWith('/admin')
   const onCount = location.pathname.startsWith('/cycle-count')
+  const onSaUnpack = location.pathname.startsWith('/sa-unpack')
 
   // Drop the presence row before the token goes away - admin_release needs a
   // valid session to identify the caller, so it cannot be done afterwards.
@@ -88,14 +90,19 @@ function TopBar() {
       <div className="topactions">
         <LastUpdate />
 
-        {onAdmin || onCount ? (
+        {onAdmin || onCount || onSaUnpack ? (
           <Link className="btn ghost" to="/">
             &larr; Back to search
           </Link>
         ) : (
-          <Link className="btn" to="/admin">
-            Update query
-          </Link>
+          <>
+            <Link className="btn secondary" to="/sa-unpack">
+              SA UNPACK
+            </Link>
+            <Link className="btn" to="/admin">
+              Update query
+            </Link>
+          </>
         )}
 
         {/* Cycle count is deliberately NOT offered here. The search page is
@@ -176,6 +183,14 @@ export default function App() {
                     <TransitPage />
                   </Suspense>
                 </RequireAuth>
+              }
+            />
+            <Route
+              path="/sa-unpack"
+              element={
+                <Suspense fallback={<p className="muted">Loading SA Unpack...</p>}>
+                  <SaUnpackPage />
+                </Suspense>
               }
             />
             <Route path="*" element={<Navigate to="/" replace />} />

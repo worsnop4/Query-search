@@ -992,4 +992,24 @@ Features:
   - Batch lookup `fetchCaseDestinationsBatch(cases)` renders the `transit-dest-badge` next to `TRANSIT`.
 - **Migration**: `supabase/19_case_details.sql`.
 
+---
+
+## SA UNPACK (Case & Section Parts Breakdown)
+
+Built Sep 2026. Accessible via the **"SA UNPACK"** button on the home header or `/sa-unpack`.
+Allows warehouse operators to search any Case Number to inspect all part numbers inside, separated into sections (e.g. TRIMMING, BATTERY SHOP, LOW CHASSIS, HIGH CHASSIS, ENGINE, FINAL, etc.).
+
+### Architecture
+- **Table**: `public.sa_unpack_items` (`id` BIGSERIAL PRIMARY KEY, `sa`, `case_no`, `part_number`, `part_name`, `section`, `pack_qty`, `updated_at`).
+- **Indexes**: `case_no` (B-tree + pg_trgm for partial searching), `section`, `part_number`, `sa`, `updated_at`.
+- **Uploaded on `/admin`**:
+  - `sa 9.10 unpack.xlsx` (SA, Case Number, Part Number, part_name, Section, pack_qty) -> parsed and uploaded via `insert_sa_unpack_batch(p_rows jsonb)` in chunks of 2,000.
+- **Search Page (`/sa-unpack`)**:
+  - Live suggestions and case number search.
+  - Aggregated by `section` via `get_sa_unpack_case(case_no)`.
+  - Displays Part Number, Part Name, Total Qty (and box counts).
+  - Copies parts breakdown table to clipboard as TSV.
+- **Migration**: `supabase/20_sa_unpack.sql`.
+
+
 
