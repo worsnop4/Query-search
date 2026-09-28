@@ -14,7 +14,6 @@ import { buildUpdateMessage, whatsappUrl } from '../lib/notify'
 import { writeClipboard } from '../lib/clipboard'
 import { useAuth } from '../lib/AuthContext'
 import { CaseDetailsAdmin } from '../components/CaseDetailsAdmin'
-import { SaUnpackAdmin } from '../components/SaUnpackAdmin'
 
 const nf = new Intl.NumberFormat()
 
@@ -741,7 +740,6 @@ export default function AdminPage() {
       ))}
 
       <CaseDetailsAdmin />
-      <SaUnpackAdmin />
 
       <DownloadCard blockedBy={uploaderOf('inventory')?.display_name ?? null} />
     </div>
